@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "GEE AI Code Assistant",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "在 Google Earth Engine Code Editor 中使用 DeepSeek 或其他 OpenAI 兼容模型读写代码。",
   "permissions": [
     "sidePanel",

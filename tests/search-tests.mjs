@@ -5,7 +5,8 @@ import {
   extractOfficialPage,
   parseDatasetIndexHtml,
   parseDocsIndexHtml,
-  rankEntries
+  rankEntries,
+  selectDatasetCandidates
 } from "../lib/search.js";
 
 const datasetHtml = `
@@ -19,6 +20,17 @@ assert.match(datasets[0].description, /Optical imagery/);
 assert.equal(rankEntries(datasets, "哨兵2地表反射率", 1)[0].slug, "COPERNICUS_S2_SR_HARMONIZED");
 assert.equal(rankEntries(datasets, "daily precipitation", 1)[0].slug, "UCSB-CHG_CHIRPS_DAILY");
 assert.match(expandQuery("计算降水"), /precipitation/);
+assert.match(expandQuery("计算 2000-2020 年 NDVI 均值变化"), /landsat modis sentinel-2/);
+
+const ndviCandidates = selectDatasetCandidates([
+  { title: "Landsat annual NDVI", slug: "LANDSAT_NDVI", url: "https://example/landsat", searchText: "landsat ndvi" },
+  { title: "Landsat 8-day NDVI", slug: "LANDSAT_NDVI_8DAY", url: "https://example/landsat-8", searchText: "landsat ndvi" },
+  { title: "MOD13Q1 Vegetation Indices", slug: "MODIS_061_MOD13Q1", url: "https://example/modis", searchText: "modis vegetation indices ndvi" },
+  { title: "Sentinel-2 Surface Reflectance", slug: "COPERNICUS_S2_SR_HARMONIZED", url: "https://example/sentinel", searchText: "sentinel-2 surface reflectance" }
+], "2000-2020 NDVI", 3);
+assert.match(ndviCandidates[0].url, /^https:\/\/example\/landsat/);
+assert.equal(ndviCandidates[1].url, "https://example/modis");
+assert.equal(ndviCandidates[2].url, "https://example/sentinel");
 
 const docsHtml = `
   <nav>

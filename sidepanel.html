@@ -8,16 +8,22 @@
   </head>
   <body>
     <header class="app-header">
-      <div>
-        <h1>GEE AI 助手</h1>
-        <p>DeepSeek / OpenAI 兼容接口</p>
+      <div class="header-leading">
+        <button id="settingsButton" class="icon-button" type="button" aria-label="打开模型与项目设置" aria-controls="settingsPanel" aria-expanded="false">⚙</button>
+        <div>
+          <h1>GEE AI 助手</h1>
+          <p>DeepSeek / OpenAI 兼容接口</p>
+        </div>
       </div>
       <span id="connectionBadge" class="badge muted">未连接</span>
     </header>
 
     <main>
-      <details class="settings-card" id="settingsPanel">
-        <summary>模型与项目设置</summary>
+      <section class="settings-card hidden" id="settingsPanel" aria-label="模型与项目设置">
+        <div class="settings-header">
+          <strong>模型与项目设置</strong>
+          <button id="closeSettingsButton" class="icon-button" type="button" aria-label="关闭设置">×</button>
+        </div>
         <form id="settingsForm">
           <label>
             API 地址
@@ -39,13 +45,25 @@
             <input id="rememberApiKey" name="rememberApiKey" type="checkbox">
             <span>在本机持久保存 API Key</span>
           </label>
+          <label class="check-row">
+            <input id="thinkingEnabled" name="thinkingEnabled" type="checkbox" checked>
+            <span>启用 DeepSeek V4 思考模式</span>
+          </label>
+          <label>
+            思考强度
+            <select id="reasoningEffort" name="reasoningEffort">
+              <option value="high">High（默认）</option>
+              <option value="max">Max（复杂任务）</option>
+            </select>
+          </label>
+          <p id="providerCapabilityHint" class="hint">官方 DeepSeek V4 支持实时思考；其他兼容接口会自动使用普通模式。</p>
           <div class="button-row">
             <button class="primary" type="submit">保存设置</button>
             <button id="clearKeyButton" type="button">清除密钥</button>
           </div>
           <p id="keyStatus" class="hint"></p>
         </form>
-      </details>
+      </section>
 
       <section class="editor-card">
         <div>
@@ -65,6 +83,19 @@
         </div>
         <div id="toolSourceList" class="tool-source-list"></div>
         <p id="toolWarnings" class="hint warning-text"></p>
+      </section>
+
+      <section id="planPanel" class="plan-card hidden" aria-live="polite">
+        <div class="candidate-header">
+          <strong>分析计划</strong>
+          <span id="planStatusBadge" class="badge muted">未开始</span>
+        </div>
+        <div id="planContent" class="plan-content"></div>
+        <div id="planActions" class="button-row hidden">
+          <button id="confirmPlanButton" class="primary" type="button">确认方案并生成代码</button>
+          <button id="continuePlanButton" type="button">继续澄清</button>
+          <button id="cancelPlanButton" type="button">取消计划</button>
+        </div>
       </section>
 
       <section id="conversation" class="conversation" aria-live="polite"></section>
@@ -89,7 +120,9 @@
           <label class="check-row"><input id="includeCode" type="checkbox" checked><span>当前代码</span></label>
           <label class="check-row"><input id="includeSelection" type="checkbox" checked><span>选中代码</span></label>
           <label class="check-row"><input id="includeConsole" type="checkbox" checked><span>Console</span></label>
+          <label class="check-row mode-toggle"><input id="planMode" type="checkbox"><span>计划模式</span></label>
         </div>
+        <p id="planModeHint" class="hint hidden">计划模式会先检索官方资料并澄清需求，确认方案后才生成代码。</p>
         <div class="tool-options">
           <span>工具</span>
           <label class="check-row"><input id="datasetSearch" type="checkbox" checked><span>Dataset Search</span></label>

@@ -22,7 +22,7 @@ body {
   font-size: 13px;
 }
 
-button, input, textarea { font: inherit; }
+button, input, select, textarea { font: inherit; }
 
 button {
   min-height: 32px;
@@ -59,6 +59,23 @@ button.primary:hover { background: var(--blue-dark); }
   backdrop-filter: blur(8px);
 }
 
+.header-leading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.icon-button {
+  display: inline-grid;
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
+  place-items: center;
+  font-size: 18px;
+  line-height: 1;
+}
+
 h1 { margin: 0; font-size: 17px; }
 .app-header p { margin: 2px 0 0; color: var(--muted); font-size: 11px; }
 
@@ -72,15 +89,16 @@ main {
 .editor-card,
 .prompt-card,
 .candidate,
-.tool-results {
+.tool-results,
+.plan-card {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface);
   box-shadow: 0 1px 2px rgba(35, 45, 60, 0.06);
 }
 
-.settings-card { padding: 10px 12px; }
-.settings-card summary { cursor: pointer; font-weight: 600; }
+.settings-card { padding: 12px; }
+.settings-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .settings-card form { display: grid; gap: 10px; margin-top: 12px; }
 
 label { display: grid; gap: 5px; color: #414b5a; }
@@ -88,6 +106,7 @@ label { display: grid; gap: 5px; color: #414b5a; }
 input[type="text"],
 input[type="url"],
 input[type="password"],
+select,
 textarea {
   width: 100%;
   padding: 9px 10px;
@@ -98,7 +117,7 @@ textarea {
   outline: none;
 }
 
-input:focus, textarea:focus {
+input:focus, select:focus, textarea:focus {
   border-color: var(--blue);
   box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.13);
 }
@@ -124,6 +143,30 @@ input:focus, textarea:focus {
 .button-row.compact { justify-content: flex-end; }
 
 .conversation { display: grid; gap: 9px; }
+
+.reasoning-message {
+  margin-right: 18px;
+  border: 1px solid #d7c6f2;
+  border-radius: 11px;
+  background: #f7f2ff;
+  color: #4f3b66;
+}
+
+.reasoning-message summary {
+  padding: 9px 11px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.reasoning-content {
+  max-height: 260px;
+  margin: 0;
+  padding: 0 11px 11px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 11px/1.5 "Roboto Mono", ui-monospace, monospace;
+}
 
 .message {
   padding: 10px 12px;
@@ -151,6 +194,21 @@ input:focus, textarea:focus {
 .candidate-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 
 .tool-results { padding: 12px; }
+.plan-card { padding: 12px; }
+.plan-content { display: grid; gap: 10px; line-height: 1.5; }
+.plan-content h3 { margin: 4px 0 0; font-size: 13px; }
+.plan-content p { margin: 0; }
+.plan-content ul { margin: 0; padding-left: 18px; }
+.plan-dataset {
+  display: grid;
+  gap: 4px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-alt);
+}
+.plan-dataset a { color: var(--blue-dark); }
+.plan-question { color: #704214; }
 .tool-source-list { display: grid; gap: 7px; }
 .tool-source {
   display: grid;
@@ -193,6 +251,7 @@ input:focus, textarea:focus {
 
 .prompt-card textarea { resize: vertical; min-height: 86px; }
 .context-options { display: flex; flex-wrap: wrap; gap: 12px; }
+.mode-toggle { color: var(--blue-dark); font-weight: 600; }
 .tool-options {
   display: flex;
   flex-wrap: wrap;

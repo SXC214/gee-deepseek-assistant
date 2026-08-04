@@ -3,8 +3,11 @@ import {
   extractOfficialPage,
   parseDatasetIndexHtml,
   parseDocsIndexHtml,
-  rankEntries
+  rankEntries,
+  selectDatasetCandidates
 } from "./lib/search.js";
+import { buildChatRequestBody, isOfficialDeepSeekV4, isValidReasoningEffort } from "./lib/api.js";
+import { consumeSseResponse } from "./lib/sse.js";
 
 const DEFAULT_SETTINGS = Object.freeze({
   baseUrl: "https://api.deepseek.com",
@@ -12,10 +15,13 @@ const DEFAULT_SETTINGS = Object.freeze({
   projectId: "",
   rememberApiKey: false,
   datasetSearch: true,
-  docsSearch: true
+  docsSearch: true,
+  thinkingEnabled: true,
+  reasoningEffort: "high"
 });
 
 const activeRequests = new Map();
+const pendingAborts = new Set();
 const pageCache = new Map();
 const INDEX_TTL_MS = 24 * 60 * 60 * 1000;
 const DATASET_INDEX_URL = "https://developers.google.com/earth-engine/datasets/catalog";
@@ -36,6 +42,31 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 chrome.runtime.onStartup.addListener(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+});
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "AI_CHAT_STREAM") return;
+  let portRequestId = "";
+
+  port.onMessage.addListener((message) => {
+    if (!message || typeof message.type !== "string") return;
+    if (message.type === "START") {
+      if (portRequestId) {
+        safePortPost(port, { type: "ERROR", requestId: portRequestId, error: "此连接已有正在处理的请求" });
+        return;
+      }
+      portRequestId = String(message.payload?.requestId || crypto.randomUUID());
+      streamChat({ ...(message.payload || {}), requestId: portRequestId }, port).catch((error) => {
+        safePortPost(port, { type: "ERROR", requestId: portRequestId, error: safeError(error) });
+      });
+    } else if (message.type === "ABORT") {
+      abortActiveRequest(String(message.requestId || portRequestId));
+    }
+  });
+
+  port.onDisconnect.addListener(() => {
+    if (portRequestId) abortActiveRequest(portRequestId);
+  });
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -70,7 +101,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "TOOLS_SEARCH") {
-    searchOfficialTools(message.payload || {}).then(sendResponse, (error) => {
+    searchOfficialToolsRequest(message.payload || {}).then(sendResponse, (error) => {
       sendResponse({ ok: false, error: safeError(error) });
     });
     return true;
@@ -84,8 +115,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "AI_ABORT") {
-    const request = activeRequests.get(message.requestId);
-    if (request) request.abort();
+    abortRequest(String(message.requestId || ""));
     sendResponse({ ok: true });
     return false;
   }
@@ -99,12 +129,13 @@ async function getPublicSettings() {
     chrome.storage.local.get("apiKey"),
     chrome.storage.session.get("apiKey")
   ]);
-  const merged = { ...DEFAULT_SETTINGS, ...(settings || {}) };
+  const merged = mergeStoredSettings(settings);
   return {
     ok: true,
     settings: {
       ...merged,
-      hasApiKey: Boolean(sessionSecrets.apiKey || localSecrets.apiKey)
+      hasApiKey: Boolean(sessionSecrets.apiKey || localSecrets.apiKey),
+      supportsThinking: isOfficialDeepSeekV4(merged.baseUrl, merged.model)
     }
   };
 }
@@ -112,12 +143,13 @@ async function getPublicSettings() {
 async function saveSettings(payload) {
   const existing = await chrome.storage.local.get("settings");
   const settings = {
-    ...DEFAULT_SETTINGS,
-    ...(existing.settings || {}),
+    ...mergeStoredSettings(existing.settings),
     baseUrl: normalizeBaseUrl(payload.baseUrl),
     model: String(payload.model || "").trim(),
     projectId: String(payload.projectId || "").trim(),
-    rememberApiKey: Boolean(payload.rememberApiKey)
+    rememberApiKey: Boolean(payload.rememberApiKey),
+    thinkingEnabled: payload.thinkingEnabled !== false,
+    reasoningEffort: normalizeReasoningEffort(payload.reasoningEffort)
   };
 
   if (!settings.model) throw new Error("模型名称不能为空");
@@ -160,8 +192,7 @@ async function clearApiKeys() {
 async function saveToolPreferences(payload) {
   const stored = await chrome.storage.local.get("settings");
   const settings = {
-    ...DEFAULT_SETTINGS,
-    ...(stored.settings || {}),
+    ...mergeStoredSettings(stored.settings),
     datasetSearch: Boolean(payload.datasetSearch),
     docsSearch: Boolean(payload.docsSearch)
   };
@@ -179,28 +210,32 @@ async function getApiKey() {
 
 async function chat(payload) {
   const requestId = String(payload.requestId || crypto.randomUUID());
-  const [{ settings }, apiKey] = await Promise.all([
-    chrome.storage.local.get("settings"),
-    getApiKey()
-  ]);
-  const merged = { ...DEFAULT_SETTINGS, ...(settings || {}) };
-  if (!apiKey) throw new Error("请先在设置中填写 API Key");
-
-  const controller = new AbortController();
-  activeRequests.set(requestId, controller);
+  const controller = registerRequest(requestId);
 
   try {
+    const [{ settings }, apiKey] = await Promise.all([
+      chrome.storage.local.get("settings"),
+      getApiKey()
+    ]);
+    throwIfAborted(controller.signal);
+    const merged = mergeStoredSettings(settings);
+    if (!apiKey) throw new Error("请先在设置中填写 API Key");
+    const body = buildChatRequestBody({
+      model: merged.model,
+      messages: normalizeMessages(payload.messages),
+      settings: merged,
+      purpose: payload.purpose || "direct",
+      stream: false
+    });
+    if (body.stream) throw new Error("官方 DeepSeek V4 请求必须使用流式连接");
+
     const response = await fetch(chatCompletionsUrl(merged.baseUrl), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${apiKey}`
       },
-      body: JSON.stringify({
-        model: merged.model,
-        messages: normalizeMessages(payload.messages),
-        stream: false
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal
     });
 
@@ -221,20 +256,139 @@ async function chat(payload) {
     if (typeof content !== "string") {
       throw new Error("模型响应中没有 choices[0].message.content");
     }
-    return { ok: true, requestId, content, usage: data.usage || null };
+    return {
+      ok: true,
+      requestId,
+      content,
+      reasoningContent: typeof data?.choices?.[0]?.message?.reasoning_content === "string"
+        ? data.choices[0].message.reasoning_content
+        : "",
+      usage: data.usage || null,
+      finishReason: data?.choices?.[0]?.finish_reason || null
+    };
   } finally {
-    activeRequests.delete(requestId);
+    if (activeRequests.get(requestId) === controller) activeRequests.delete(requestId);
   }
 }
 
-async function searchOfficialTools(payload) {
+async function streamChat(payload, port) {
+  const requestId = String(payload.requestId || crypto.randomUUID());
+  const controller = registerRequest(requestId);
+  let content = "";
+  let usage = null;
+
+  try {
+    const [{ settings }, apiKey] = await Promise.all([
+      chrome.storage.local.get("settings"),
+      getApiKey()
+    ]);
+    throwIfAborted(controller.signal);
+    const merged = mergeStoredSettings(settings);
+    if (!apiKey) throw new Error("请先在设置中填写 API Key");
+    if (!isOfficialDeepSeekV4(merged.baseUrl, merged.model)) {
+      throw new Error("当前模型接口不支持 DeepSeek V4 实时思考协议");
+    }
+    const body = buildChatRequestBody({
+      model: merged.model,
+      messages: normalizeMessages(payload.messages),
+      settings: merged,
+      purpose: payload.purpose || "direct",
+      stream: true
+    });
+    const response = await fetch(chatCompletionsUrl(merged.baseUrl), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+
+    const state = await consumeSseResponse(response, {
+      signal: controller.signal,
+      onEvent(event) {
+        if (event.type === "REASONING_DELTA") {
+          safePortPost(port, { type: "REASONING_DELTA", requestId, delta: event.delta });
+        } else if (event.type === "CONTENT_DELTA") {
+          content += event.delta;
+          safePortPost(port, { type: "CONTENT_DELTA", requestId, delta: event.delta });
+        } else if (event.type === "USAGE") {
+          usage = event.usage;
+        }
+      }
+    });
+    if (controller.signal.aborted) {
+      const error = new Error("请求已停止");
+      error.name = "AbortError";
+      throw error;
+    }
+    if (!state.done) throw new Error("模型流式响应在完成标记前中断");
+    if (!content) throw new Error("模型响应中没有最终 content");
+    safePortPost(port, {
+      type: "DONE",
+      requestId,
+      content,
+      usage: usage || state.usage || null,
+      finishReason: state.finishReason || null
+    });
+  } finally {
+    if (activeRequests.get(requestId) === controller) activeRequests.delete(requestId);
+  }
+}
+
+async function searchOfficialToolsRequest(payload) {
+  const requestId = String(payload.requestId || crypto.randomUUID());
+  const controller = registerRequest(requestId);
+  try {
+    return await searchOfficialTools(payload, controller.signal);
+  } finally {
+    if (activeRequests.get(requestId) === controller) activeRequests.delete(requestId);
+  }
+}
+
+function abortRequest(requestId) {
+  if (!requestId) return;
+  const request = activeRequests.get(requestId);
+  if (request) {
+    request.abort();
+    return;
+  }
+  pendingAborts.add(requestId);
+  if (pendingAborts.size > 100) pendingAborts.delete(pendingAborts.values().next().value);
+}
+
+function abortActiveRequest(requestId) {
+  activeRequests.get(requestId)?.abort();
+}
+
+function registerRequest(requestId) {
+  activeRequests.get(requestId)?.abort();
+  const controller = new AbortController();
+  activeRequests.set(requestId, controller);
+  if (pendingAborts.delete(requestId)) controller.abort();
+  return controller;
+}
+
+function safePortPost(port, message) {
+  try {
+    port.postMessage(message);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function searchOfficialTools(payload, signal) {
+  throwIfAborted(signal);
   const query = String(payload.query || "").trim();
   if (!query) return { ok: true, context: "", sources: [], warnings: [] };
 
   const jobs = [];
-  if (payload.datasetSearch) jobs.push(runTool("Dataset Search", () => searchDatasets(query)));
-  if (payload.docsSearch) jobs.push(runTool("Docs Search", () => searchDocs(query)));
+  if (payload.datasetSearch) jobs.push(runTool("Dataset Search", () => searchDatasets(query, signal)));
+  if (payload.docsSearch) jobs.push(runTool("Docs Search", () => searchDocs(query, signal)));
   const groups = await Promise.all(jobs);
+  throwIfAborted(signal);
   const sources = groups.flatMap((group) => group.sources || []);
   const warnings = groups.flatMap((group) => group.warning ? [group.warning] : []);
 
@@ -246,29 +400,37 @@ async function searchOfficialTools(payload) {
   };
 }
 
+function throwIfAborted(signal) {
+  if (!signal?.aborted) return;
+  const error = new Error("请求已停止");
+  error.name = "AbortError";
+  throw error;
+}
+
 async function runTool(name, callback) {
   try {
     return { sources: await callback() };
   } catch (error) {
+    if (error?.name === "AbortError") throw error;
     return { sources: [], warning: `${name}：${safeError(error)}` };
   }
 }
 
-async function searchDatasets(query) {
+async function searchDatasets(query, signal) {
   const index = await getCachedIndex("datasetIndexV2", async () => {
-    const html = await fetchText(DATASET_INDEX_URL);
+    const html = await fetchText(DATASET_INDEX_URL, signal);
     const parsed = parseDatasetIndexHtml(html);
     if (parsed.length < 100) throw new Error("官方数据目录索引解析失败");
     return parsed;
   });
-  const candidates = rankEntries(index, query, 6);
-  const details = await fetchDetails(candidates.slice(0, 4), query, "dataset");
+  const candidates = selectDatasetCandidates(index, query, 6);
+  const details = await fetchDetails(candidates, query, "dataset", signal);
   return details.map((detail) => ({ ...detail, type: "dataset" }));
 }
 
-async function searchDocs(query) {
+async function searchDocs(query, signal) {
   const index = await getCachedIndex("docsIndexV2", async () => {
-    const pages = await Promise.all(DOC_INDEX_URLS.map(fetchText));
+    const pages = await Promise.all(DOC_INDEX_URLS.map((url) => fetchText(url, signal)));
     const merged = pages.flatMap((html) => parseDocsIndexHtml(html));
     const unique = [...new Map(merged.map((entry) => [entry.url, entry])).values()];
     if (unique.length < 30) throw new Error("官方文档索引解析失败");
@@ -278,7 +440,7 @@ async function searchDocs(query) {
   const direct = directApiDocEntries(query);
   const ranked = rankEntries(index, query, 8);
   const candidates = [...new Map([...direct, ...ranked].map((entry) => [entry.url, entry])).values()].slice(0, 5);
-  const details = await fetchDetails(candidates, query, "docs");
+  const details = await fetchDetails(candidates, query, "docs", signal);
   return details.map((detail) => ({ ...detail, type: "docs" }));
 }
 
@@ -293,21 +455,26 @@ async function getCachedIndex(key, loader) {
   return entries;
 }
 
-async function fetchDetails(entries, query, kind) {
+async function fetchDetails(entries, query, kind, signal) {
   const settled = await Promise.allSettled(entries.map(async (entry) => {
-    const html = await fetchText(entry.url);
+    const html = await fetchText(entry.url, signal);
     return extractOfficialPage(html, entry.url, query, kind);
   }));
+  const aborted = settled.find((item) => item.status === "rejected" && item.reason?.name === "AbortError");
+  if (aborted) throw aborted.reason;
   return settled.filter((item) => item.status === "fulfilled").map((item) => item.value);
 }
 
-async function fetchText(url) {
+async function fetchText(url, externalSignal) {
   const canonical = String(url).split("#")[0];
   if (pageCache.has(canonical)) return pageCache.get(canonical);
   const target = new URL(canonical);
   if (target.hostname === "developers.google.com") target.searchParams.set("hl", "en");
 
   const controller = new AbortController();
+  const abortFromExternal = () => controller.abort();
+  if (externalSignal?.aborted) controller.abort();
+  else externalSignal?.addEventListener("abort", abortFromExternal, { once: true });
   const timeout = setTimeout(() => controller.abort(), 15000);
   try {
     const response = await fetch(target.href, {
@@ -321,6 +488,7 @@ async function fetchText(url) {
     return text;
   } finally {
     clearTimeout(timeout);
+    externalSignal?.removeEventListener("abort", abortFromExternal);
   }
 }
 
@@ -343,6 +511,32 @@ function normalizeMessages(messages) {
     role: ["system", "user", "assistant"].includes(message.role) ? message.role : "user",
     content: String(message.content || "")
   }));
+}
+
+function normalizeReasoningEffort(value) {
+  const effort = String(value || DEFAULT_SETTINGS.reasoningEffort).toLowerCase();
+  if (!isValidReasoningEffort(effort)) throw new Error("思考强度必须是 high 或 max");
+  return effort;
+}
+
+function mergeStoredSettings(value) {
+  const stored = value && typeof value === "object" ? value : {};
+  return {
+    baseUrl: typeof stored.baseUrl === "string" && stored.baseUrl.trim()
+      ? stored.baseUrl.trim()
+      : DEFAULT_SETTINGS.baseUrl,
+    model: typeof stored.model === "string" && stored.model.trim()
+      ? stored.model.trim()
+      : DEFAULT_SETTINGS.model,
+    projectId: typeof stored.projectId === "string" ? stored.projectId.trim() : "",
+    rememberApiKey: Boolean(stored.rememberApiKey),
+    datasetSearch: stored.datasetSearch !== false,
+    docsSearch: stored.docsSearch !== false,
+    thinkingEnabled: stored.thinkingEnabled !== false,
+    reasoningEffort: isValidReasoningEffort(stored.reasoningEffort)
+      ? String(stored.reasoningEffort).toLowerCase()
+      : DEFAULT_SETTINGS.reasoningEffort
+  };
 }
 
 function normalizeBaseUrl(value) {
