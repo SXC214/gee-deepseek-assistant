@@ -1,0 +1,18 @@
+# Dependencies and generated output
+node_modules/
+dist/
+*.zip
+*.crx
+
+# Secrets and local configuration
+.env
+.env.*
+*.pem
+*.key
+CODE.txt
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,9 @@
+{
+  "name": "gee-deepseek-assistant",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/run-tests.mjs && node tests/search-tests.mjs && node tests/ui-tests.mjs && node tests/bridge-tests.mjs"
+  }
+}

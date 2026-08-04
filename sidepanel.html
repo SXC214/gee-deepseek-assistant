@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GEE AI 助手</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <h1>GEE AI 助手</h1>
+        <p>DeepSeek / OpenAI 兼容接口</p>
+      </div>
+      <span id="connectionBadge" class="badge muted">未连接</span>
+    </header>
+
+    <main>
+      <details class="settings-card" id="settingsPanel">
+        <summary>模型与项目设置</summary>
+        <form id="settingsForm">
+          <label>
+            API 地址
+            <input id="baseUrl" name="baseUrl" type="url" placeholder="https://api.deepseek.com" required>
+          </label>
+          <label>
+            模型名称
+            <input id="model" name="model" type="text" placeholder="deepseek-v4-flash" required>
+          </label>
+          <label>
+            API Key
+            <input id="apiKey" name="apiKey" type="password" autocomplete="off" placeholder="已保存的密钥不会回显">
+          </label>
+          <label>
+            Earth Engine Project ID（可选）
+            <input id="projectId" name="projectId" type="text" placeholder="your-cloud-project">
+          </label>
+          <label class="check-row">
+            <input id="rememberApiKey" name="rememberApiKey" type="checkbox">
+            <span>在本机持久保存 API Key</span>
+          </label>
+          <div class="button-row">
+            <button class="primary" type="submit">保存设置</button>
+            <button id="clearKeyButton" type="button">清除密钥</button>
+          </div>
+          <p id="keyStatus" class="hint"></p>
+        </form>
+      </details>
+
+      <section class="editor-card">
+        <div>
+          <strong id="scriptTitle">尚未读取脚本</strong>
+          <p id="scriptMeta">打开 Earth Engine Code Editor 后读取。</p>
+        </div>
+        <div class="button-row compact">
+          <button id="readButton" type="button">读取代码</button>
+          <button id="runButton" type="button">运行脚本</button>
+        </div>
+      </section>
+
+      <section id="toolResults" class="tool-results hidden">
+        <div class="candidate-header">
+          <strong>官方资料</strong>
+          <span id="toolResultCount" class="badge"></span>
+        </div>
+        <div id="toolSourceList" class="tool-source-list"></div>
+        <p id="toolWarnings" class="hint warning-text"></p>
+      </section>
+
+      <section id="conversation" class="conversation" aria-live="polite"></section>
+
+      <section id="candidatePanel" class="candidate hidden">
+        <div class="candidate-header">
+          <strong>建议修改</strong>
+          <span id="diffStats" class="badge"></span>
+        </div>
+        <pre id="diffView" class="diff-view"></pre>
+        <div class="button-row">
+          <button id="applyButton" class="primary" type="button">替换完整脚本</button>
+          <button id="insertButton" type="button">插入到光标</button>
+          <button id="dismissButton" type="button">忽略</button>
+        </div>
+        <p class="hint">写入前会检查脚本是否被修改；可在 Ace 编辑器中使用 Ctrl+Z 撤销。</p>
+      </section>
+
+      <form id="promptForm" class="prompt-card">
+        <textarea id="prompt" rows="5" placeholder="例如：修复当前报错，并优化 Sentinel-2 云掩膜代码" required></textarea>
+        <div class="context-options">
+          <label class="check-row"><input id="includeCode" type="checkbox" checked><span>当前代码</span></label>
+          <label class="check-row"><input id="includeSelection" type="checkbox" checked><span>选中代码</span></label>
+          <label class="check-row"><input id="includeConsole" type="checkbox" checked><span>Console</span></label>
+        </div>
+        <div class="tool-options">
+          <span>工具</span>
+          <label class="check-row"><input id="datasetSearch" type="checkbox" checked><span>Dataset Search</span></label>
+          <label class="check-row"><input id="docsSearch" type="checkbox" checked><span>Docs Search</span></label>
+        </div>
+        <div class="button-row send-row">
+          <span id="statusText" class="status">就绪</span>
+          <button id="stopButton" type="button" class="hidden">停止</button>
+          <button id="sendButton" class="primary" type="submit">发送</button>
+        </div>
+      </form>
+    </main>
+
+    <script type="module" src="sidepanel.js"></script>
+  </body>
+</html>

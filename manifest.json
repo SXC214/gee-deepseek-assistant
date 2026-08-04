@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "GEE AI Code Assistant",
+  "version": "0.2.0",
+  "description": "在 Google Earth Engine Code Editor 中使用 DeepSeek 或其他 OpenAI 兼容模型读写代码。",
+  "permissions": [
+    "sidePanel",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://code.earthengine.google.com/*",
+    "https://api.deepseek.com/*",
+    "https://developers.google.com/earth-engine/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "打开 GEE AI 助手"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://code.earthengine.google.com/*"],
+      "js": ["page-bridge.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://code.earthengine.google.com/*"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
