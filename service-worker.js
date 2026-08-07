@@ -276,6 +276,7 @@ async function streamChat(payload, port) {
   const controller = registerRequest(requestId);
   let content = "";
   let usage = null;
+  let sawReasoning = false;
 
   try {
     const [{ settings }, apiKey] = await Promise.all([
@@ -309,6 +310,7 @@ async function streamChat(payload, port) {
       signal: controller.signal,
       onEvent(event) {
         if (event.type === "REASONING_DELTA") {
+          sawReasoning = true;
           safePortPost(port, { type: "REASONING_DELTA", requestId, delta: event.delta });
         } else if (event.type === "CONTENT_DELTA") {
           content += event.delta;
@@ -324,7 +326,11 @@ async function streamChat(payload, port) {
       throw error;
     }
     if (!state.done) throw new Error("模型流式响应在完成标记前中断");
-    if (!content) throw new Error("模型响应中没有最终 content");
+    if (!content) {
+      throw new Error(sawReasoning
+        ? "模型仅返回了思考内容，没有生成最终回答，请重试或调整提问"
+        : "模型没有返回有效内容，请重试");
+    }
     safePortPost(port, {
       type: "DONE",
       requestId,

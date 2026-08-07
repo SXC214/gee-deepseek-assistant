@@ -203,4 +203,73 @@ assert.equal(streamSignal.aborted, true);
 assert.equal(posted.at(-1)?.type, "ERROR");
 assert.equal(posted.at(-1)?.error, "请求已停止");
 
+function sseResponse(text) {
+  return {
+    ok: true,
+    status: 200,
+    body: {
+      getReader() {
+        let sent = false;
+        return {
+          async read() {
+            if (sent) return { done: true, value: undefined };
+            sent = true;
+            return { done: false, value: text };
+          },
+          cancel() {},
+          releaseLock() {}
+        };
+      }
+    }
+  };
+}
+
+function connectStreamPort(requestId) {
+  const portPosted = [];
+  const streamPort = {
+    name: "AI_CHAT_STREAM",
+    onMessage: createEvent(),
+    onDisconnect: createEvent(),
+    postMessage(message) {
+      portPosted.push(message);
+    }
+  };
+  runtimeOnConnect.fire(streamPort);
+  streamPort.onMessage.first({
+    type: "START",
+    payload: {
+      requestId,
+      purpose: "direct",
+      messages: [{ role: "user", content: "empty content test" }]
+    }
+  });
+  return portPosted;
+}
+
+async function waitUntil(predicate, attempts = 100) {
+  for (let attempt = 0; attempt < attempts && !predicate(); attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
+// Reasoning-only stream: clear, actionable message instead of a generic one.
+globalThis.fetch = () => sseResponse([
+  'data: {"choices":[{"delta":{"reasoning_content":"thinking..."}}]}',
+  'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+  "data: [DONE]",
+  ""
+].join("\n\n"));
+const reasoningPosted = connectStreamPort("reasoning-only");
+await waitUntil(() => reasoningPosted.some((message) => message.type === "ERROR"));
+assert.ok(reasoningPosted.some((message) => message.type === "REASONING_DELTA"));
+const reasoningError = reasoningPosted.find((message) => message.type === "ERROR");
+assert.equal(reasoningError.error, "模型仅返回了思考内容，没有生成最终回答，请重试或调整提问");
+
+// No reasoning and no content: distinct generic message.
+globalThis.fetch = () => sseResponse("data: [DONE]\n\n");
+const emptyPosted = connectStreamPort("empty-content");
+await waitUntil(() => emptyPosted.some((message) => message.type === "ERROR"));
+const emptyError = emptyPosted.find((message) => message.type === "ERROR");
+assert.equal(emptyError.error, "模型没有返回有效内容，请重试");
+
 console.log("Service worker tests passed.");
