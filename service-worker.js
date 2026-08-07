@@ -142,6 +142,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "GEE_REST_LIST_ASSETS") {
+    geeRestRequest("assets", message.payload || {}).then(sendResponse, (error) => {
+      sendResponse({ ok: false, error: safeError(error) });
+    });
+    return true;
+  }
+
+  if (message.type === "GEE_REST_LIST_TASKS") {
+    geeRestRequest("tasks", message.payload || {}).then(sendResponse, (error) => {
+      sendResponse({ ok: false, error: safeError(error) });
+    });
+    return true;
+  }
+
   if (message.type === "AI_ABORT") {
     abortRequest(String(message.requestId || ""));
     sendResponse({ ok: true });
@@ -217,6 +231,23 @@ async function clearApiKeys() {
     chrome.storage.local.remove("apiKey"),
     chrome.storage.session.remove("apiKey")
   ]);
+}
+
+// Wraps one GEE REST message in the shared requestId/abort bookkeeping.
+async function geeRestRequest(kind, payload) {
+  const requestId = String(payload.requestId || crypto.randomUUID());
+  const controller = registerRequest(requestId);
+  try {
+    const result = await runGeeRestCall(kind, { ...payload, signal: controller.signal });
+    return {
+      ok: true,
+      requestId,
+      items: result.items,
+      nextPageToken: kind === "assets" ? String(result.nextPageToken || "") : ""
+    };
+  } finally {
+    if (activeRequests.get(requestId) === controller) activeRequests.delete(requestId);
+  }
 }
 
 async function saveToolPreferences(payload) {

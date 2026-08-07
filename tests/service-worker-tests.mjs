@@ -626,4 +626,108 @@ const expiredSearch = await dispatch({
 assert.equal(expiredSearch.ok, true);
 assert.ok(expiredFetches >= 1, "expired persistent entries are filtered and refetched");
 
+// ---- GEE REST routing: independent OAuth orchestration behind messages.
+let geeAuthFlowCalls = 0;
+globalThis.chrome.identity = {
+  getRedirectURL: () => "https://sw-tests.chromiumapp.org/",
+  async launchWebAuthFlow() {
+    geeAuthFlowCalls += 1;
+    return `https://sw-tests.chromiumapp.org/#access_token=sw-token-${geeAuthFlowCalls}&expires_in=3600`;
+  }
+};
+localData.settings = {
+  ...localData.settings,
+  geeClientId: "sw-client.apps.googleusercontent.com",
+  projectId: "gee proj"
+};
+function geeJson(status, body) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: () => null },
+    text: async () => JSON.stringify(body)
+  };
+}
+
+// Not configured: clear Chinese guidance, no auth attempt.
+localData.settings = { ...localData.settings, geeClientId: "" };
+delete sessionData.geeAccessTokenV1;
+const geeMissing = await dispatch({ type: "GEE_REST_LIST_ASSETS", payload: { requestId: "gee-missing" } });
+assert.equal(geeMissing.ok, false);
+assert.equal(geeMissing.error, "请先在设置中填写 Google OAuth 客户端 ID / Project ID");
+assert.equal(geeAuthFlowCalls, 0, "missing configuration never opens the auth flow");
+localData.settings = { ...localData.settings, geeClientId: "sw-client.apps.googleusercontent.com" };
+
+// Assets success: normalization, pagination token and encoded project.
+const geeUrls = [];
+globalThis.fetch = async (url) => {
+  geeUrls.push(String(url));
+  return geeJson(200, {
+    assets: [
+      { id: "projects/gee proj/assets/ndvi", type: "IMAGE_COLLECTION" },
+      { name: "projects/gee proj/assets/legacy" }
+    ],
+    nextPageToken: "page-2"
+  });
+};
+const geeAssets = await dispatch({ type: "GEE_REST_LIST_ASSETS", payload: { requestId: "gee-assets" } });
+assert.equal(geeAssets.ok, true);
+assert.equal(geeAssets.requestId, "gee-assets");
+assert.equal(geeAssets.nextPageToken, "page-2");
+assert.deepEqual(geeAssets.items[0], { id: "projects/gee proj/assets/ndvi", name: "ndvi", type: "IMAGE_COLLECTION" });
+assert.equal(geeAssets.items[1].type, "UNKNOWN", "missing asset fields get defaults");
+assert.match(geeUrls[0], /\/projects\/gee%20proj\/assets\?/);
+assert.match(geeUrls[0], /pageSize=100/);
+assert.equal(geeAuthFlowCalls, 1, "first REST call authorizes once");
+
+// Session-cached token: follow-up requests skip the auth flow.
+const geeCached = await dispatch({ type: "GEE_REST_LIST_ASSETS", payload: { requestId: "gee-assets-cached" } });
+assert.equal(geeCached.ok, true);
+assert.equal(geeAuthFlowCalls, 1, "cached token skips the auth flow");
+
+// Optional pageToken is forwarded to the REST endpoint.
+await dispatch({ type: "GEE_REST_LIST_ASSETS", payload: { requestId: "gee-assets-page", pageToken: "page-2" } });
+assert.match(geeUrls.at(-1), /pageToken=page-2/);
+
+// Tasks success: pageSize=50 and tolerant operation normalization.
+globalThis.fetch = async (url) => {
+  geeUrls.push(String(url));
+  return geeJson(200, {
+    operations: [
+      { name: "operations/a", metadata: { state: "RUNNING", description: "ingest image" } },
+      { done: true }
+    ]
+  });
+};
+const geeTasks = await dispatch({ type: "GEE_REST_LIST_TASKS", payload: { requestId: "gee-tasks" } });
+assert.equal(geeTasks.ok, true);
+assert.equal(geeTasks.requestId, "gee-tasks");
+assert.equal(geeTasks.nextPageToken, "", "task lists never paginate");
+assert.equal(geeTasks.items[0].state, "RUNNING");
+assert.equal(geeTasks.items[0].summary, "ingest image");
+assert.equal(geeTasks.items[1].state, "DONE", "done flag maps to DONE without metadata");
+assert.match(geeUrls.at(-1), /\/operations\?pageSize=50$/);
+
+// 401: cache cleared, re-authorized exactly once, then success.
+delete sessionData.geeAccessTokenV1;
+let gee401Calls = 0;
+globalThis.fetch = async () => {
+  gee401Calls += 1;
+  return gee401Calls === 1 ? geeJson(401, { error: { message: "expired" } }) : geeJson(200, { operations: [] });
+};
+const geeFlowBefore = geeAuthFlowCalls;
+const geeReauth = await dispatch({ type: "GEE_REST_LIST_TASKS", payload: { requestId: "gee-401-reauth" } });
+assert.equal(geeReauth.ok, true);
+assert.equal(gee401Calls, 2, "one 401 retry, no more");
+assert.equal(geeAuthFlowCalls, geeFlowBefore + 2, "initial auth plus exactly one re-auth");
+
+// Persistent 401: user-readable Chinese error, still only one re-auth.
+delete sessionData.geeAccessTokenV1;
+globalThis.fetch = async () => geeJson(401, { error: { message: "expired" } });
+const geeFailBefore = geeAuthFlowCalls;
+const gee401Fail = await dispatch({ type: "GEE_REST_LIST_TASKS", payload: { requestId: "gee-401-fail" } });
+assert.equal(gee401Fail.ok, false);
+assert.match(gee401Fail.error, /Earth Engine 授权失败/);
+assert.equal(geeAuthFlowCalls, geeFailBefore + 2, "never re-authorizes more than once");
+
 console.log("Service worker tests passed.");
