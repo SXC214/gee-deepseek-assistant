@@ -472,4 +472,97 @@ const stableUrl = [...retryAttempts.keys()].find((key) => key.includes("MODIS_RE
 assert.equal(retryAttempts.get(stableUrl), 1, "healthy pages are fetched once");
 workerModule.__timings.pageBackoffMs = 2000;
 
+// ---- Retrieval cache: stampede lock, parsed-result cache and TTL persistence.
+function datasetIndexHtml(prefix, count) {
+  const items = Array.from({ length: count }, (_unused, index) => (
+    `<li><a href="/earth-engine/datasets/catalog/${prefix}_${index}">MODIS Terra True Color ${prefix} ${index}</a> modis terra true color updated daily</li>`
+  )).join("");
+  return `<html><body><ul>${items}</ul></body></html>`;
+}
+const detailPageHtml = "<html><head><title>MODIS</title></head><body>modis terra true color</body></html>";
+
+// Stampede lock: two concurrent searches share one index fetch+parse pass.
+workerModule.__testing.clearRetrievalCaches();
+delete localData.datasetIndexV2;
+delete localData.pageDetailCacheV1;
+let lockCatalogFetches = 0;
+globalThis.fetch = async (url) => {
+  const target = String(url);
+  if (!target.includes("MODIS_LOCK")) {
+    lockCatalogFetches += 1;
+    // Keep the loader in flight long enough for the second search to arrive.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    return pageResponse(datasetIndexHtml("MODIS_LOCK", 120));
+  }
+  return pageResponse(detailPageHtml);
+};
+const [lockFirst, lockSecond] = await Promise.all([
+  dispatch({ type: "TOOLS_SEARCH", payload: { requestId: "lock-a", query: "modis", datasetSearch: true, docsSearch: false } }),
+  dispatch({ type: "TOOLS_SEARCH", payload: { requestId: "lock-b", query: "modis", datasetSearch: true, docsSearch: false } })
+]);
+assert.equal(lockFirst.ok, true);
+assert.equal(lockSecond.ok, true);
+assert.equal(lockCatalogFetches, 1, "concurrent searches share one in-flight index fetch");
+assert.ok(Array.isArray(localData.datasetIndexV2?.entries), "parsed index is persisted for restarts");
+
+// Parsed-result cache: a repeat search is served without re-fetching pages.
+workerModule.__testing.clearRetrievalCaches();
+delete localData.pageDetailCacheV1;
+localData.datasetIndexV2 = { createdAt: Date.now(), entries: datasetEntries("MODIS_MEM", 6) };
+let memDetailFetches = 0;
+globalThis.fetch = async () => {
+  memDetailFetches += 1;
+  return pageResponse(detailPageHtml);
+};
+const memFirst = await dispatch({
+  type: "TOOLS_SEARCH",
+  payload: { requestId: "mem-a", query: "modis", datasetSearch: true, docsSearch: false }
+});
+assert.equal(memFirst.ok, true);
+const firstRoundFetches = memDetailFetches;
+assert.ok(firstRoundFetches >= 1, "detail pages were fetched on the first search");
+assert.ok(localData.pageDetailCacheV1, "detail summaries are persisted under a dedicated key");
+const memSecond = await dispatch({
+  type: "TOOLS_SEARCH",
+  payload: { requestId: "mem-b", query: "modis", datasetSearch: true, docsSearch: false }
+});
+assert.equal(memSecond.ok, true);
+assert.equal(memDetailFetches, firstRoundFetches, "repeat searches are served from the parsed-result cache");
+assert.deepEqual(memSecond.sources, memFirst.sources, "cached parses produce identical sources");
+
+// Service worker restart: persistent summaries are consulted before fetching.
+workerModule.__testing.clearRetrievalCaches();
+const persistedKey = workerModule.detailCacheKey(
+  "https://developers.google.com/earth-engine/datasets/catalog/MODIS_MEM_0", "modis", "dataset"
+);
+assert.ok(localData.pageDetailCacheV1[persistedKey]?.result, "previous search persisted a detail summary");
+let restartFetches = 0;
+globalThis.fetch = async () => {
+  restartFetches += 1;
+  return pageResponse(detailPageHtml);
+};
+const restartSearch = await dispatch({
+  type: "TOOLS_SEARCH",
+  payload: { requestId: "restart-hit", query: "modis", datasetSearch: true, docsSearch: false }
+});
+assert.equal(restartSearch.ok, true);
+assert.equal(restartFetches, 0, "fresh persistent summaries skip the network after a restart");
+
+// TTL: entries older than 24h are filtered on read and refetched.
+workerModule.__testing.clearRetrievalCaches();
+for (const item of Object.values(localData.pageDetailCacheV1)) {
+  item.createdAt = Date.now() - 25 * 60 * 60 * 1000;
+}
+let expiredFetches = 0;
+globalThis.fetch = async () => {
+  expiredFetches += 1;
+  return pageResponse(detailPageHtml);
+};
+const expiredSearch = await dispatch({
+  type: "TOOLS_SEARCH",
+  payload: { requestId: "expired-refetch", query: "modis", datasetSearch: true, docsSearch: false }
+});
+assert.equal(expiredSearch.ok, true);
+assert.ok(expiredFetches >= 1, "expired persistent entries are filtered and refetched");
+
 console.log("Service worker tests passed.");

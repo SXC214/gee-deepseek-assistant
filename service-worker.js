@@ -23,8 +23,16 @@ const DEFAULT_SETTINGS = Object.freeze({
 
 const activeRequests = new Map();
 const pendingAborts = new Set();
-const pageCache = new Map();
+// Parsed detail-page results keyed by URL + kind + query (summaries are
+// query-dependent). Entries above the size cap bypass the cache entirely.
+const pageResultCache = new Map();
+// Shares one in-flight index fetch+parse across concurrent searches.
+const indexInFlight = new Map();
 const INDEX_TTL_MS = 24 * 60 * 60 * 1000;
+const DETAIL_CACHE_KEY = "pageDetailCacheV1";
+const DETAIL_CACHE_MAX_ENTRIES = 40;
+const PAGE_RESULT_CACHE_LIMIT = 40;
+const PAGE_RESULT_MAX_BYTES = 200_000;
 // Mutable so Node tests can shorten waits; production defaults stay conservative.
 export const __timings = {
   chatTimeoutMs: 60000,
@@ -566,24 +574,122 @@ async function getCachedIndex(key, loader) {
   if (cached?.createdAt && Date.now() - cached.createdAt < INDEX_TTL_MS && Array.isArray(cached.entries)) {
     return cached.entries;
   }
-  const entries = await loader();
-  await chrome.storage.local.set({ [key]: { createdAt: Date.now(), entries } });
-  return entries;
+  // Concurrent searches share one fetch+parse pass for the same index key, so
+  // a queued message or a dual-tool search never re-downloads the whole
+  // catalog HTML while a parse is already running.
+  if (indexInFlight.has(key)) return indexInFlight.get(key);
+  const pending = (async () => {
+    try {
+      const entries = await loader();
+      try {
+        await chrome.storage.local.set({ [key]: { createdAt: Date.now(), entries } });
+      } catch (error) {
+        console.warn(`索引缓存写入失败（${key}），本次结果仅保留在内存：`, error);
+      }
+      return entries;
+    } finally {
+      indexInFlight.delete(key);
+    }
+  })();
+  indexInFlight.set(key, pending);
+  return pending;
 }
 
 async function fetchDetails(entries, query, kind, signal) {
-  const settled = await Promise.allSettled(entries.map((entry) => pageSemaphore.run(async () => {
-    const html = await fetchText(entry.url, signal);
-    return extractOfficialPage(html, entry.url, query, kind);
-  })));
+  const settled = await Promise.allSettled(entries.map((entry) => pageSemaphore.run(() => fetchDetailPage(entry, query, kind, signal))));
   const aborted = settled.find((item) => item.status === "rejected" && item.reason?.name === "AbortError");
   if (aborted) throw aborted.reason;
   return settled.filter((item) => item.status === "fulfilled").map((item) => item.value);
 }
 
+export function detailCacheKey(url, query, kind) {
+  return `${String(url).split("#")[0]}|${kind}|${String(query).trim()}`;
+}
+
+async function fetchDetailPage(entry, query, kind, signal) {
+  const key = detailCacheKey(entry.url, query, kind);
+  const memoryHit = pageResultCache.get(key);
+  if (memoryHit) return memoryHit;
+  // Survives service worker restarts: persistent summaries are consulted
+  // before any network fetch, and expired entries are filtered on read.
+  const persistedHit = await readPersistedDetail(key);
+  if (persistedHit) {
+    rememberDetailResult(key, persistedHit);
+    return persistedHit;
+  }
+  const html = await fetchText(entry.url, signal);
+  const result = extractOfficialPage(html, entry.url, query, kind);
+  rememberDetailResult(key, result);
+  await persistDetailResult(key, result);
+  return result;
+}
+
+function rememberDetailResult(key, result) {
+  if (serializedSize(result) > PAGE_RESULT_MAX_BYTES) return;
+  pageResultCache.set(key, result);
+  if (pageResultCache.size > PAGE_RESULT_CACHE_LIMIT) {
+    pageResultCache.delete(pageResultCache.keys().next().value);
+  }
+}
+
+function serializedSize(value) {
+  try {
+    return JSON.stringify(value).length;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+// Serializes the read-modify-write cycle so concurrent detail persists do not
+// clobber each other inside chrome.storage.local.
+let detailCacheWrite = Promise.resolve();
+
+async function readPersistedDetail(key) {
+  try {
+    const stored = await chrome.storage.local.get(DETAIL_CACHE_KEY);
+    const cache = stored[DETAIL_CACHE_KEY];
+    const item = cache && typeof cache === "object" ? cache[key] : null;
+    if (!item || typeof item.createdAt !== "number" || !item.result) return null;
+    if (Date.now() - item.createdAt >= INDEX_TTL_MS) return null;
+    return item.result;
+  } catch {
+    return null;
+  }
+}
+
+function persistDetailResult(key, result) {
+  if (serializedSize(result) > PAGE_RESULT_MAX_BYTES) return Promise.resolve();
+  detailCacheWrite = detailCacheWrite
+    .catch(() => undefined)
+    .then(() => writePersistedDetail(key, result));
+  return detailCacheWrite;
+}
+
+async function writePersistedDetail(key, result) {
+  try {
+    const stored = await chrome.storage.local.get(DETAIL_CACHE_KEY);
+    const previous = stored[DETAIL_CACHE_KEY] && typeof stored[DETAIL_CACHE_KEY] === "object"
+      ? stored[DETAIL_CACHE_KEY]
+      : {};
+    const now = Date.now();
+    const fresh = {};
+    for (const [cacheKey, item] of Object.entries(previous)) {
+      if (item && typeof item.createdAt === "number" && now - item.createdAt < INDEX_TTL_MS) {
+        fresh[cacheKey] = item;
+      }
+    }
+    fresh[key] = { createdAt: now, result };
+    const ordered = Object.keys(fresh).sort((a, b) => fresh[a].createdAt - fresh[b].createdAt);
+    while (ordered.length > DETAIL_CACHE_MAX_ENTRIES) delete fresh[ordered.shift()];
+    await chrome.storage.local.set({ [DETAIL_CACHE_KEY]: fresh });
+  } catch (error) {
+    // Persistence is only an optimization; never block retrieval on it.
+    console.warn("检索详情持久缓存写入失败，后续将重新抓取：", error);
+  }
+}
+
 async function fetchText(url, externalSignal) {
   const canonical = String(url).split("#")[0];
-  if (pageCache.has(canonical)) return pageCache.get(canonical);
   const target = new URL(canonical);
   if (target.hostname === "developers.google.com") target.searchParams.set("hl", "en");
 
@@ -598,11 +704,16 @@ async function fetchText(url, externalSignal) {
     backoffMs: __timings.pageBackoffMs
   });
   if (!response.ok) throw new Error(`官方页面请求失败（HTTP ${response.status}）`);
-  const text = await response.text();
-  pageCache.set(canonical, text);
-  if (pageCache.size > 40) pageCache.delete(pageCache.keys().next().value);
-  return text;
+  return response.text();
 }
+
+// Lets Node tests simulate a service worker restart for the cache layers.
+export const __testing = {
+  clearRetrievalCaches() {
+    pageResultCache.clear();
+    indexInFlight.clear();
+  }
+};
 
 function formatOfficialContext(sources) {
   if (!sources.length) return "未检索到匹配的官方资料。请不要猜测数据集 ID、波段或 API。";
