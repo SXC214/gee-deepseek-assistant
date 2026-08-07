@@ -65,27 +65,84 @@ let currentSettings = null;
 let busy = false;
 let cancelRequested = false;
 let initialized = false;
+let initializing = false;
+let initRetryButton = null;
 let followConversation = true;
 let consoleReadAttempted = false;
 
-initialize().catch(showError);
+initialize().catch(handleInitializeFailure);
 
 async function initialize() {
-  bindEvents();
-  await loadSettings();
-  await restoreChatHistory();
-  await restoreMessageQueue();
-  await restoreActivePlan();
-  await readEditor({ quiet: true });
-  await restoreCandidate();
-  initialized = true;
-  if (!busy) {
-    setBusy(false);
-    if (!queuePaused && queuedMessages.length) queueMicrotask(() => drainMessageQueue());
+  initializing = true;
+  try {
+    bindEvents();
+    await loadSettings();
+    await restoreChatHistory();
+    await restoreMessageQueue();
+    await restoreActivePlan();
+    await readEditor({ quiet: true });
+    await restoreCandidate();
+    initialized = true;
+    if (!busy) {
+      setBusy(false);
+      if (!queuePaused && queuedMessages.length) queueMicrotask(() => drainMessageQueue());
+    }
+  } finally {
+    initializing = false;
   }
 }
 
+function handleInitializeFailure(error) {
+  showError(error);
+  renderInitializeRetry(error);
+}
+
+function renderInitializeRetry(error) {
+  const container = elements.conversation;
+  if (!container) return;
+  if (initRetryButton) initRetryButton.closest(".init-retry-notice")?.remove();
+  const notice = document.createElement("div");
+  notice.className = "chat-entry init-retry-notice";
+  const text = document.createElement("p");
+  text.textContent = `初始化失败：${safeError(error)}`;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "重试初始化";
+  button.addEventListener("click", () => {
+    retryInitialize().catch(handleInitializeFailure);
+  });
+  notice.append(text, button);
+  container.appendChild(notice);
+  initRetryButton = button;
+}
+
+async function retryInitialize() {
+  if (initialized || initializing) return;
+  if (initRetryButton) {
+    initRetryButton.disabled = true;
+    initRetryButton.textContent = "正在初始化…";
+  }
+  setStatus("正在重试初始化…");
+  try {
+    await initialize();
+    initRetryButton?.closest(".init-retry-notice")?.remove();
+    initRetryButton = null;
+    setStatus("初始化完成");
+  } catch (error) {
+    showError(error);
+    if (initRetryButton) {
+      initRetryButton.disabled = false;
+      initRetryButton.textContent = "重试初始化";
+    } else {
+      renderInitializeRetry(error);
+    }
+  }
+}
+
+let eventsBound = false;
 function bindEvents() {
+  if (eventsBound) return;
+  eventsBound = true;
   elements.settingsButton.addEventListener("click", () => toggleSettings());
   elements.closeSettingsButton.addEventListener("click", () => closeSettings());
   elements.settingsBackdrop.addEventListener("click", () => closeSettings());

@@ -272,6 +272,10 @@ textarea:focus {
 .message.user { margin-left: 32px; border-color: #cbdcf8; background: var(--blue-soft); }
 .message.assistant { margin-right: 18px; background: #fff; }
 .message.error { margin-right: 18px; border-color: #edb5b1; background: var(--red-soft); color: var(--red); }
+.init-retry-notice { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; padding: 10px 12px; border: 1px solid #edb5b1; border-radius: 10px; background: var(--red-soft); color: var(--red); font-size: 12px; }
+.init-retry-notice p { margin: 0; overflow-wrap: anywhere; }
+.init-retry-notice button { padding: 5px 12px; border: 1px solid var(--red); border-radius: 7px; background: var(--surface); color: var(--red); font-weight: 600; cursor: pointer; }
+.init-retry-notice button:disabled { opacity: 0.6; cursor: wait; }
 .message-meta { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 5px; color: var(--muted); font-size: 9px; }
 .message-body { white-space: pre-wrap; overflow-wrap: anywhere; }
 .message-actions { display: flex; justify-content: flex-end; gap: 4px; margin-top: 7px; opacity: 0; transition: opacity 120ms ease; }
