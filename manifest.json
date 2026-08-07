@@ -8,12 +8,14 @@
     "storage",
     "unlimitedStorage",
     "tabs",
-    "clipboardWrite"
+    "clipboardWrite",
+    "identity"
   ],
   "host_permissions": [
     "https://code.earthengine.google.com/*",
     "https://api.deepseek.com/*",
-    "https://developers.google.com/earth-engine/*"
+    "https://developers.google.com/earth-engine/*",
+    "https://earthengine.googleapis.com/*"
   ],
   "optional_host_permissions": [
     "https://*/*",

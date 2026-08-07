@@ -9,11 +9,13 @@ import {
 import { buildChatRequestBody, isOfficialDeepSeekV4, isValidReasoningEffort } from "./lib/api.js";
 import { consumeSseResponse } from "./lib/sse.js";
 import { RETRYABLE_STATUSES, createSemaphore, fetchWithPolicy, waitInterruptible } from "./lib/http.js";
+import { buildAuthUrl, listAssets, listTasks, parseAuthFragment } from "./lib/gee-rest.js";
 
 const DEFAULT_SETTINGS = Object.freeze({
   baseUrl: "https://api.deepseek.com",
   model: "deepseek-v4-flash",
   projectId: "",
+  geeClientId: "",
   rememberApiKey: false,
   datasetSearch: true,
   docsSearch: true,
@@ -173,6 +175,7 @@ async function saveSettings(payload) {
     baseUrl: normalizeBaseUrl(payload.baseUrl),
     model: String(payload.model || "").trim(),
     projectId: String(payload.projectId || "").trim(),
+    geeClientId: String(payload.geeClientId || "").trim(),
     rememberApiKey: Boolean(payload.rememberApiKey),
     thinkingEnabled: payload.thinkingEnabled !== false,
     reasoningEffort: normalizeReasoningEffort(payload.reasoningEffort),
@@ -233,6 +236,69 @@ async function getApiKey() {
     chrome.storage.local.get("apiKey")
   ]);
   return sessionSecrets.apiKey || localSecrets.apiKey || "";
+}
+
+// ---- GEE REST direct access. Tokens come only from the extension's own
+// independent OAuth client via chrome.identity; web-page tokens are never
+// read or reused. Cached in chrome.storage.session (browser session only).
+const GEE_TOKEN_KEY = "geeAccessTokenV1";
+// Refresh a little early so a token never dies mid-request.
+const GEE_TOKEN_EXPIRY_MARGIN_MS = 60000;
+
+async function getGeeToken(interactive = true) {
+  const cachedRecord = (await chrome.storage.session.get(GEE_TOKEN_KEY))[GEE_TOKEN_KEY];
+  if (cachedRecord?.token && typeof cachedRecord.expiresAt === "number"
+    && cachedRecord.expiresAt - Date.now() > GEE_TOKEN_EXPIRY_MARGIN_MS) {
+    return cachedRecord.token;
+  }
+  const { settings } = await chrome.storage.local.get("settings");
+  const merged = mergeStoredSettings(settings);
+  if (!merged.geeClientId) {
+    throw new Error("请先在设置中填写 Google OAuth 客户端 ID / Project ID");
+  }
+  const authUrl = buildAuthUrl(merged.geeClientId, chrome.identity.getRedirectURL());
+  let callbackUrl;
+  try {
+    callbackUrl = await chrome.identity.launchWebAuthFlow({ url: authUrl, interactive: Boolean(interactive) });
+  } catch (error) {
+    throw new Error(`Google 授权未完成：${safeError(error)}`);
+  }
+  const { accessToken, expiresIn } = parseAuthFragment(callbackUrl);
+  const record = { token: accessToken, expiresAt: Date.now() + expiresIn * 1000 };
+  await chrome.storage.session.set({ [GEE_TOKEN_KEY]: record });
+  return record.token;
+}
+
+async function clearGeeTokenCache() {
+  await chrome.storage.session.remove(GEE_TOKEN_KEY);
+}
+
+// Runs one REST call with the cached token; a 401 clears the cache and
+// re-authorizes exactly once before giving up with a user-readable error.
+async function runGeeRestCall(kind, payload = {}) {
+  const { settings } = await chrome.storage.local.get("settings");
+  const merged = mergeStoredSettings(settings);
+  if (!merged.geeClientId || !merged.projectId) {
+    throw new Error("请先在设置中填写 Google OAuth 客户端 ID / Project ID");
+  }
+  const call = (token) => (kind === "tasks"
+    ? listTasks(token, merged.projectId, { signal: payload.signal })
+    : listAssets(token, merged.projectId, String(payload.pageToken || ""), { signal: payload.signal }));
+
+  try {
+    return await call(await getGeeToken(true));
+  } catch (error) {
+    if (error?.code !== "UNAUTHORIZED") throw error;
+  }
+  await clearGeeTokenCache();
+  try {
+    return await call(await getGeeToken(true));
+  } catch (retryError) {
+    if (retryError?.code === "UNAUTHORIZED") {
+      throw new Error("Earth Engine 授权失败：重新授权后仍被拒绝，请核对 OAuth 客户端配置与项目的 Earth Engine 访问权限");
+    }
+    throw retryError;
+  }
 }
 
 async function chat(payload) {
@@ -718,7 +784,10 @@ export const __testing = {
   clearRetrievalCaches() {
     pageResultCache.clear();
     indexInFlight.clear();
-  }
+  },
+  getGeeToken,
+  clearGeeTokenCache,
+  runGeeRestCall
 };
 
 function formatOfficialContext(sources) {
@@ -758,6 +827,7 @@ function mergeStoredSettings(value) {
       ? stored.model.trim()
       : DEFAULT_SETTINGS.model,
     projectId: typeof stored.projectId === "string" ? stored.projectId.trim() : "",
+    geeClientId: typeof stored.geeClientId === "string" ? stored.geeClientId.trim() : "",
     rememberApiKey: Boolean(stored.rememberApiKey),
     datasetSearch: stored.datasetSearch !== false,
     docsSearch: stored.docsSearch !== false,
