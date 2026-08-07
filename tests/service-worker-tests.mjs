@@ -77,7 +77,7 @@ globalThis.fetch = async () => {
   throw new Error("Unexpected fetch");
 };
 
-await import(`../service-worker.js?test=${Date.now()}`);
+const workerModule = await import(`../service-worker.js?test=${Date.now()}`);
 
 function dispatch(message) {
   return new Promise((resolve) => {
@@ -271,5 +271,140 @@ const emptyPosted = connectStreamPort("empty-content");
 await waitUntil(() => emptyPosted.some((message) => message.type === "ERROR"));
 const emptyError = emptyPosted.find((message) => message.type === "ERROR");
 assert.equal(emptyError.error, "模型没有返回有效内容，请重试");
+
+// ---- Transport policy: billed chat requests time out and never auto-retry.
+// A non-V4 endpoint keeps the non-streaming chat() path reachable.
+localData.settings = {
+  ...localData.settings,
+  baseUrl: "https://compatible.example.com/v1",
+  model: "generic-chat-model"
+};
+workerModule.__timings.chatTimeoutMs = 40;
+let chatTimeoutFetches = 0;
+globalThis.fetch = (_url, options) => new Promise((_resolve, reject) => {
+  chatTimeoutFetches += 1;
+  options.signal.addEventListener("abort", () => {
+    reject(new DOMException("Aborted", "AbortError"));
+  }, { once: true });
+});
+const chatTimeoutResult = await dispatch({
+  type: "AI_CHAT",
+  payload: { requestId: "chat-timeout", purpose: "direct", messages: [{ role: "user", content: "timeout" }] }
+});
+assert.equal(chatTimeoutResult.ok, false);
+assert.match(chatTimeoutResult.error, /超时/);
+assert.equal(chatTimeoutFetches, 1, "chat never auto-retries billed POSTs");
+workerModule.__timings.chatTimeoutMs = 60000;
+
+// Back to the official V4 endpoint for the streaming tests below.
+localData.settings = {
+  ...localData.settings,
+  baseUrl: "https://api.deepseek.com",
+  model: "deepseek-v4-flash"
+};
+
+// SSE body that delivers some chunks and then hangs until cancelled.
+function stalledSseResponse(chunks = []) {
+  return {
+    ok: true,
+    status: 200,
+    body: {
+      getReader() {
+        let index = 0;
+        let pendingResolve = null;
+        return {
+          read() {
+            if (index < chunks.length) return Promise.resolve({ done: false, value: chunks[index++] });
+            return new Promise((resolve) => {
+              pendingResolve = resolve;
+            });
+          },
+          cancel() {
+            pendingResolve?.({ done: true, value: undefined });
+            return Promise.resolve();
+          },
+          releaseLock() {}
+        };
+      }
+    }
+  };
+}
+
+// ---- Zero-content stream: one automatic retry, then success.
+workerModule.__timings.streamRetryDelayMs = 5;
+let retrySuccessFetches = 0;
+globalThis.fetch = () => {
+  retrySuccessFetches += 1;
+  if (retrySuccessFetches === 1) return Promise.reject(new TypeError("Failed to fetch"));
+  return sseResponse([
+    'data: {"choices":[{"delta":{"content":"hello"}}]}',
+    'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+    "data: [DONE]",
+    ""
+  ].join("\n\n"));
+};
+const retrySuccessPosted = connectStreamPort("stream-retry-success");
+await waitUntil(() => retrySuccessPosted.some((message) => message.type === "DONE"), 300);
+assert.equal(retrySuccessFetches, 2, "zero-content failure retries exactly once");
+assert.ok(retrySuccessPosted.some((message) => message.type === "CONTENT_DELTA" && message.delta === "hello"));
+assert.equal(retrySuccessPosted.find((message) => message.type === "DONE").content, "hello");
+
+// ---- Zero-content stream: retry exhausted surfaces the original error.
+let retryExhaustedFetches = 0;
+globalThis.fetch = () => {
+  retryExhaustedFetches += 1;
+  return Promise.reject(new TypeError("Failed to fetch"));
+};
+const retryExhaustedPosted = connectStreamPort("stream-retry-exhausted");
+await waitUntil(() => retryExhaustedPosted.some((message) => message.type === "ERROR"), 300);
+assert.equal(retryExhaustedFetches, 2, "at most one retry after zero content");
+assert.match(retryExhaustedPosted.find((message) => message.type === "ERROR").error, /Failed to fetch/);
+
+// ---- Idle timeout after content deltas: no retry once output exists.
+workerModule.__timings.streamIdleTimeoutMs = 30;
+let stallFetches = 0;
+globalThis.fetch = () => {
+  stallFetches += 1;
+  return stalledSseResponse(['data: {"choices":[{"delta":{"content":"partial"}}]}\n\n']);
+};
+const stallPosted = connectStreamPort("stream-abort-after-content");
+await waitUntil(() => stallPosted.some((message) => message.type === "ERROR"), 300);
+assert.equal(stallFetches, 1, "no retry after content deltas were produced");
+assert.ok(stallPosted.some((message) => message.type === "CONTENT_DELTA" && message.delta === "partial"));
+assert.match(stallPosted.find((message) => message.type === "ERROR").error, /超时/);
+workerModule.__timings.streamIdleTimeoutMs = 60000;
+
+// ---- First-byte timeout: silent stream retries once, then fails.
+workerModule.__timings.streamFirstByteTimeoutMs = 30;
+let firstByteFetches = 0;
+globalThis.fetch = () => {
+  firstByteFetches += 1;
+  return stalledSseResponse();
+};
+const firstBytePosted = connectStreamPort("stream-first-byte-timeout");
+await waitUntil(() => firstBytePosted.some((message) => message.type === "ERROR"), 300);
+assert.equal(firstByteFetches, 2, "first-byte timeout is retryable while nothing was produced");
+assert.match(firstBytePosted.find((message) => message.type === "ERROR").error, /超时/);
+workerModule.__timings.streamFirstByteTimeoutMs = 30000;
+
+// ---- Manual stop is never retried.
+let manualStopFetches = 0;
+let manualStopSignal = null;
+globalThis.fetch = (_url, options) => {
+  manualStopFetches += 1;
+  manualStopSignal = options.signal;
+  return new Promise((_resolve, reject) => {
+    options.signal.addEventListener("abort", () => {
+      reject(new DOMException("Aborted", "AbortError"));
+    }, { once: true });
+  });
+};
+const manualStopPosted = connectStreamPort("manual-stop");
+await waitUntil(() => Boolean(manualStopSignal), 300);
+await dispatch({ type: "AI_ABORT", requestId: "manual-stop" });
+await waitUntil(() => manualStopPosted.some((message) => message.type === "ERROR"), 300);
+assert.equal(manualStopFetches, 1, "manual stop is never retried");
+assert.equal(manualStopSignal.aborted, true);
+assert.equal(manualStopPosted.find((message) => message.type === "ERROR").error, "请求已停止");
 
 console.log("Service worker tests passed.");

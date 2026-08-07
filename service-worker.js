@@ -8,6 +8,7 @@ import {
 } from "./lib/search.js";
 import { buildChatRequestBody, isOfficialDeepSeekV4, isValidReasoningEffort } from "./lib/api.js";
 import { consumeSseResponse } from "./lib/sse.js";
+import { RETRYABLE_STATUSES, fetchWithPolicy, waitInterruptible } from "./lib/http.js";
 
 const DEFAULT_SETTINGS = Object.freeze({
   baseUrl: "https://api.deepseek.com",
@@ -24,6 +25,20 @@ const activeRequests = new Map();
 const pendingAborts = new Set();
 const pageCache = new Map();
 const INDEX_TTL_MS = 24 * 60 * 60 * 1000;
+// Mutable so Node tests can shorten waits; production defaults stay conservative.
+export const __timings = {
+  chatTimeoutMs: 60000,
+  streamFirstByteTimeoutMs: 30000,
+  streamIdleTimeoutMs: 60000,
+  streamRetryDelayMs: 1000,
+  pageTimeoutMs: 15000,
+  pageBackoffMs: 2000,
+  pageMaxRetries: 2,
+  pageConcurrency: 4
+};
+// Billed POST requests are retried at most once, and only while nothing has
+// been streamed to the user yet (see streamChat).
+const STREAM_RETRY_LIMIT = 1;
 const DATASET_INDEX_URL = "https://developers.google.com/earth-engine/datasets/catalog";
 const DOC_INDEX_URLS = [
   "https://developers.google.com/earth-engine/guides",
@@ -211,6 +226,7 @@ async function getApiKey() {
 async function chat(payload) {
   const requestId = String(payload.requestId || crypto.randomUUID());
   const controller = registerRequest(requestId);
+  let deadlineHit = false;
 
   try {
     const [{ settings }, apiKey] = await Promise.all([
@@ -229,43 +245,60 @@ async function chat(payload) {
     });
     if (body.stream) throw new Error("官方 DeepSeek V4 请求必须使用流式连接");
 
-    const response = await fetch(chatCompletionsUrl(merged.baseUrl), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal
-    });
-
-    const raw = await response.text();
-    let data;
+    // Billed POST: never auto-retry, but enforce a hard total timeout that
+    // also covers reading the response body.
+    const deadline = setTimeout(() => {
+      deadlineHit = true;
+      controller.abort();
+    }, __timings.chatTimeoutMs);
     try {
-      data = JSON.parse(raw);
-    } catch {
-      throw new Error(`模型接口返回了非 JSON 内容（HTTP ${response.status}）`);
-    }
+      const response = await fetchWithPolicy(chatCompletionsUrl(merged.baseUrl), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+        timeoutMs: __timings.chatTimeoutMs,
+        retryable: false
+      });
 
-    if (!response.ok) {
-      const detail = data?.error?.message || data?.message || `HTTP ${response.status}`;
-      throw new Error(`模型请求失败：${detail}`);
-    }
+      const raw = await response.text();
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        throw new Error(`模型接口返回了非 JSON 内容（HTTP ${response.status}）`);
+      }
 
-    const content = data?.choices?.[0]?.message?.content;
-    if (typeof content !== "string") {
-      throw new Error("模型响应中没有 choices[0].message.content");
+      if (!response.ok) {
+        const detail = data?.error?.message || data?.message || `HTTP ${response.status}`;
+        throw new Error(`模型请求失败：${detail}`);
+      }
+
+      const content = data?.choices?.[0]?.message?.content;
+      if (typeof content !== "string") {
+        throw new Error("模型响应中没有 choices[0].message.content");
+      }
+      return {
+        ok: true,
+        requestId,
+        content,
+        reasoningContent: typeof data?.choices?.[0]?.message?.reasoning_content === "string"
+          ? data.choices[0].message.reasoning_content
+          : "",
+        usage: data.usage || null,
+        finishReason: data?.choices?.[0]?.finish_reason || null
+      };
+    } catch (error) {
+      if (deadlineHit || error?.name === "TimeoutError") {
+        throw new Error("模型请求超时，请稍后重试");
+      }
+      throw error;
+    } finally {
+      clearTimeout(deadline);
     }
-    return {
-      ok: true,
-      requestId,
-      content,
-      reasoningContent: typeof data?.choices?.[0]?.message?.reasoning_content === "string"
-        ? data.choices[0].message.reasoning_content
-        : "",
-      usage: data.usage || null,
-      finishReason: data?.choices?.[0]?.finish_reason || null
-    };
   } finally {
     if (activeRequests.get(requestId) === controller) activeRequests.delete(requestId);
   }
@@ -274,9 +307,6 @@ async function chat(payload) {
 async function streamChat(payload, port) {
   const requestId = String(payload.requestId || crypto.randomUUID());
   const controller = registerRequest(requestId);
-  let content = "";
-  let usage = null;
-  let sawReasoning = false;
 
   try {
     const [{ settings }, apiKey] = await Promise.all([
@@ -296,51 +326,129 @@ async function streamChat(payload, port) {
       purpose: payload.purpose || "direct",
       stream: true
     });
-    const response = await fetch(chatCompletionsUrl(merged.baseUrl), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal
-    });
 
-    const state = await consumeSseResponse(response, {
-      signal: controller.signal,
-      onEvent(event) {
-        if (event.type === "REASONING_DELTA") {
-          sawReasoning = true;
-          safePortPost(port, { type: "REASONING_DELTA", requestId, delta: event.delta });
-        } else if (event.type === "CONTENT_DELTA") {
-          content += event.delta;
-          safePortPost(port, { type: "CONTENT_DELTA", requestId, delta: event.delta });
-        } else if (event.type === "USAGE") {
-          usage = event.usage;
+    let lastError = null;
+    for (let attempt = 0; attempt <= STREAM_RETRY_LIMIT; attempt += 1) {
+      let content = "";
+      let usage = null;
+      let sawReasoning = false;
+      let timedOut = false;
+      let eventTimer = null;
+      const attemptController = new AbortController();
+      const forwardAbort = () => attemptController.abort();
+      if (controller.signal.aborted) attemptController.abort();
+      else controller.signal.addEventListener("abort", forwardAbort, { once: true });
+      // First-byte timeout arms the initial budget; every received SSE event
+      // resets it to the idle budget. Firing aborts only this attempt.
+      const armEventTimeout = (ms) => {
+        clearTimeout(eventTimer);
+        eventTimer = setTimeout(() => {
+          timedOut = true;
+          attemptController.abort();
+        }, ms);
+      };
+      try {
+        const response = await fetchWithPolicy(chatCompletionsUrl(merged.baseUrl), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`
+          },
+          body: JSON.stringify(body),
+          signal: attemptController.signal,
+          timeoutMs: __timings.streamFirstByteTimeoutMs,
+          retryable: false
+        });
+
+        if (!response.ok) {
+          let httpError = new Error(`模型流式请求失败（HTTP ${response.status}）`);
+          try {
+            await consumeSseResponse(response, {});
+          } catch (detailError) {
+            httpError = detailError;
+          }
+          if (RETRYABLE_STATUSES.has(response.status)) markTransient(httpError);
+          throw httpError;
         }
+
+        armEventTimeout(__timings.streamFirstByteTimeoutMs);
+        const state = await consumeSseResponse(response, {
+          signal: attemptController.signal,
+          onEvent(event) {
+            armEventTimeout(__timings.streamIdleTimeoutMs);
+            if (event.type === "REASONING_DELTA") {
+              sawReasoning = true;
+              safePortPost(port, { type: "REASONING_DELTA", requestId, delta: event.delta });
+            } else if (event.type === "CONTENT_DELTA") {
+              content += event.delta;
+              safePortPost(port, { type: "CONTENT_DELTA", requestId, delta: event.delta });
+            } else if (event.type === "USAGE") {
+              usage = event.usage;
+            }
+          }
+        });
+        clearTimeout(eventTimer);
+
+        if (attemptController.signal.aborted) {
+          if (timedOut) throw createStreamTimeoutError();
+          const abortError = new Error("请求已停止");
+          abortError.name = "AbortError";
+          throw abortError;
+        }
+        if (!state.done) throw markTransient(new Error("模型流式响应在完成标记前中断"));
+        if (!content) {
+          throw new Error(sawReasoning
+            ? "模型仅返回了思考内容，没有生成最终回答，请重试或调整提问"
+            : "模型没有返回有效内容，请重试");
+        }
+        safePortPost(port, {
+          type: "DONE",
+          requestId,
+          content,
+          usage: usage || state.usage || null,
+          finishReason: state.finishReason || null
+        });
+        return;
+      } catch (error) {
+        clearTimeout(eventTimer);
+        lastError = error;
+        // Retrying re-sends the billed request, so it is only allowed while
+        // nothing has been produced or posted to the user yet, and a manual
+        // stop (outer controller) is never retried.
+        const canRetry = attempt < STREAM_RETRY_LIMIT
+          && !controller.signal.aborted
+          && !content
+          && !sawReasoning
+          && isTransientStreamError(error);
+        if (!canRetry) throw error;
+        await waitInterruptible(__timings.streamRetryDelayMs, controller.signal);
+      } finally {
+        controller.signal.removeEventListener("abort", forwardAbort);
       }
-    });
-    if (controller.signal.aborted) {
-      const error = new Error("请求已停止");
-      error.name = "AbortError";
-      throw error;
     }
-    if (!state.done) throw new Error("模型流式响应在完成标记前中断");
-    if (!content) {
-      throw new Error(sawReasoning
-        ? "模型仅返回了思考内容，没有生成最终回答，请重试或调整提问"
-        : "模型没有返回有效内容，请重试");
-    }
-    safePortPost(port, {
-      type: "DONE",
-      requestId,
-      content,
-      usage: usage || state.usage || null,
-      finishReason: state.finishReason || null
-    });
+    throw lastError;
   } finally {
     if (activeRequests.get(requestId) === controller) activeRequests.delete(requestId);
   }
+}
+
+function markTransient(error) {
+  if (error && typeof error === "object") error.transient = true;
+  return error;
+}
+
+function isTransientStreamError(error) {
+  if (!error) return false;
+  if (error.name === "TimeoutError") return true;
+  if (error.name === "AbortError") return false;
+  if (error.transient === true) return true;
+  return error instanceof TypeError;
+}
+
+function createStreamTimeoutError() {
+  const error = new Error("模型响应超时，请稍后重试");
+  error.name = "TimeoutError";
+  return error;
 }
 
 async function searchOfficialToolsRequest(payload) {
