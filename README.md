@@ -25,6 +25,7 @@
 - 用户向上阅读时会暂停自动跟随；有新内容时显示“回到最新”，回到底部后恢复跟随。
 - 模型处理期间仍可继续发送要求。消息会进入可编辑、可删除和可调整优先级的后续队列；停止当前任务会暂停而不会清空队列。
 - 顶部“＋”用于开始新对话；会先确认，再清除当前聊天、计划、代码卡和后续队列，不影响 GEE 编辑器脚本。
+- Earth Engine REST 直连：配置独立 OAuth 客户端后，可在侧边栏浏览项目资产与任务、复制资产 ID 并注入对话；令牌只保存在浏览器会话中。
 
 ## 安装
 
@@ -71,7 +72,23 @@ DeepSeek 默认 API 地址为 `https://api.deepseek.com`。扩展会调用其 `/
 
 当前版本复用 Code Editor 自身已经完成的 Earth Engine 登录和运行环境，仅通过编辑器写入代码并由用户触发 Run；它不会读取登录 Cookie、OAuth token 或 XSRF token。
 
-“Earth Engine Project ID”会作为模型上下文，帮助模型生成适用于该项目的代码，但本版本不会以该 Project ID 单独发起 Earth Engine REST 请求。若后续需要在扩展中直接列出资产、查询任务或调用 REST API，应为扩展创建独立的 Google OAuth 客户端，并通过用户授权获得 Earth Engine scope，不能复用或提取网页令牌。
+“Earth Engine Project ID”会作为模型上下文，帮助模型生成适用于该项目的代码；它同时也是 REST 直连的目标项目。
+
+### REST 直连（资产 / 任务）
+
+本功能使用完全独立的 Google OAuth 客户端：不读取、不复用、不提取 Code Editor 的登录状态或网页令牌，只通过 `chrome.identity` 弹窗经用户授权获得 `https://www.googleapis.com/auth/earthengine` 范围的短期令牌。
+
+配置步骤：
+
+1. 在 Google Cloud Console 中为你的 Earth Engine 项目创建一个 OAuth 客户端（应用类型选“Web 应用”）。
+2. 打开侧栏设置，把其中展示的只读重定向 URI（可点“复制”）添加到该 OAuth 客户端的“已获授权的重定向 URI”。
+3. 把 OAuth 客户端 ID 填入设置的“Google OAuth 客户端 ID”，并在“Earth Engine Project ID”中填写同一云项目 ID。
+4. 点击侧栏工具区的“资产/任务”。首次加载会弹出 Google 授权窗口；授权后令牌仅缓存在 `chrome.storage.session`，关闭浏览器即清除。
+
+已知限制：
+
+- 未打包（开发者模式加载）的扩展 ID 可能在重新安装或更换浏览器后变化，导致重定向 URI 改变；届时需要在 Google Cloud Console 更新该 OAuth 客户端的重定向 URI。
+- REST 直连目前只提供资产与任务的只读浏览，不会写入资产、发起导出或以扩展身份执行任何 Earth Engine 计算。
 
 ## 安全边界
 

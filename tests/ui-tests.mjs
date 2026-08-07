@@ -125,6 +125,34 @@ assert.match(script, /\.filter\(\(entry\) => entry\.purpose === "direct" && \["u
 assert.match(script, /directConversation = alignConversationToUser\(/);
 assert.match(script, /elements\.compatibleStreaming\.checked = currentSettings\.compatibleStreaming === true/);
 assert.match(script, /compatibleStreaming: elements\.compatibleStreaming\.checked/);
+// GEE REST direct connection: settings input, redirect URI helper and panel.
+assert.match(html, /id="geeClientId"/);
+assert.match(html, /id="geeRedirectUri"/);
+assert.match(html, /id="copyRedirectUriButton"[^>]*type="button"/);
+assert.match(html, /id="geeRestButton"[^>]*aria-controls="geeRestPanel"[^>]*aria-expanded="false"/);
+assert.match(html, /id="geeRestPanel" class="gee-rest-panel hidden"/);
+assert.match(html, /id="geeRestRefreshButton"/);
+assert.match(html, /id="geeRestCloseButton"/);
+assert.match(html, /id="geeRestGuide"/);
+assert.match(html, /id="geeRestStatus"/);
+assert.match(html, /id="geeAssetList"/);
+assert.match(html, /id="geeTaskList"/);
+assert.match(html, /id="geeAssetMoreButton"[^>]*hidden/);
+assert.match(html, /加载下一页/);
+assert.match(script, /elements\.geeClientId\.value = currentSettings\.geeClientId \|\| ""/);
+assert.match(script, /geeClientId: elements\.geeClientId\.value/);
+assert.match(script, /chrome\.identity\.getRedirectURL\(\)/);
+assert.match(script, /type: "GEE_REST_LIST_ASSETS"/);
+assert.match(script, /type: "GEE_REST_LIST_TASKS"/);
+assert.match(script, /const marker = `资产: \$\{assetId\}`/);
+assert.match(script, /elements\.prompt\.value = current \? `\$\{current\}\\n\$\{marker\}` : marker/);
+assert.match(script, /async function refreshGeeRest\(\)/);
+assert.match(script, /async function loadGeeAssets\(pageToken = ""\)/);
+assert.match(script, /async function loadGeeTasks\(\)/);
+assert.match(styles, /\.gee-rest-panel\s*\{/);
+assert.match(styles, /\.gee-rest-item-type\s*\{/);
+assert.match(styles, /\.gee-redirect-uri\s*\{/);
+assert.ok(manifest.permissions.includes("identity"), "identity permission backs the independent OAuth flow");
 assert.equal(packageJson.version, manifest.version);
 
 console.log("UI consistency tests passed.");

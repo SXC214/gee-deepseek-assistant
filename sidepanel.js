@@ -157,6 +157,11 @@ function bindEvents() {
     await readEditor();
   });
   elements.runButton.addEventListener("click", runScript);
+  elements.geeRestButton.addEventListener("click", () => toggleGeeRestPanel());
+  elements.geeRestCloseButton.addEventListener("click", () => toggleGeeRestPanel(false));
+  elements.geeRestRefreshButton.addEventListener("click", () => refreshGeeRest().catch(showError));
+  elements.geeAssetMoreButton.addEventListener("click", () => loadGeeAssets(geeAssetNextToken).catch(showError));
+  elements.copyRedirectUriButton.addEventListener("click", copyGeeRedirectUri);
   elements.promptForm.addEventListener("submit", sendPrompt);
   elements.stopButton.addEventListener("click", stopRequest);
   elements.applyButton.addEventListener("click", () => applyCandidate("replace_all"));
@@ -217,6 +222,7 @@ async function loadSettings() {
   elements.baseUrl.value = currentSettings.baseUrl;
   elements.model.value = currentSettings.model;
   elements.projectId.value = currentSettings.projectId || "";
+  elements.geeClientId.value = currentSettings.geeClientId || "";
   elements.rememberApiKey.checked = currentSettings.rememberApiKey;
   elements.datasetSearch.checked = currentSettings.datasetSearch !== false;
   elements.docsSearch.checked = currentSettings.docsSearch !== false;
@@ -228,6 +234,7 @@ async function loadSettings() {
     : "尚未配置 API Key";
   syncThinkingControls();
   updateProviderCapabilityHint();
+  renderGeeRedirectUri();
   if (!currentSettings.hasApiKey) openSettings({ focusKey: true });
 }
 
@@ -269,6 +276,7 @@ async function saveSettings(event) {
         baseUrl,
         model: elements.model.value,
         projectId: elements.projectId.value,
+        geeClientId: elements.geeClientId.value,
         apiKey: elements.apiKey.value,
         rememberApiKey: elements.rememberApiKey.checked,
         thinkingEnabled: elements.thinkingEnabled.checked,
@@ -297,6 +305,219 @@ async function clearKey() {
   elements.keyStatus.textContent = "尚未配置 API Key";
   if (currentSettings) currentSettings.hasApiKey = false;
   setStatus("API Key 已清除");
+}
+
+// ---- Earth Engine REST 直连面板（资产 / 任务）。令牌与授权完全由
+// service worker 中的独立 OAuth 客户端编排，这里只负责展示与触发。
+let geeAssetItems = [];
+let geeTaskItems = [];
+let geeAssetNextToken = "";
+let geeRestLoading = false;
+
+function renderGeeRedirectUri() {
+  try {
+    elements.geeRedirectUri.textContent = chrome.identity.getRedirectURL();
+  } catch {
+    elements.geeRedirectUri.textContent = "当前环境无法获取重定向 URI";
+  }
+}
+
+async function copyGeeRedirectUri() {
+  try {
+    await navigator.clipboard.writeText(elements.geeRedirectUri.textContent);
+    setStatus("已复制重定向 URI，请填入 Google Cloud Console 的 OAuth 客户端");
+  } catch (error) {
+    showError(error);
+  }
+}
+
+function toggleGeeRestPanel(forceOpen = null) {
+  const panel = elements.geeRestPanel;
+  const shouldOpen = forceOpen ?? panel.classList.contains("hidden");
+  panel.classList.toggle("hidden", !shouldOpen);
+  panel.setAttribute("aria-hidden", shouldOpen ? "false" : "true");
+  elements.geeRestButton.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
+  if (shouldOpen && !geeAssetItems.length && !geeTaskItems.length) {
+    refreshGeeRest().catch(showError);
+  }
+}
+
+function geeRestConfigured() {
+  return Boolean(currentSettings?.geeClientId && currentSettings?.projectId);
+}
+
+const GEE_REST_GUIDE = "请先在设置中填写“Google OAuth 客户端 ID”和“Earth Engine Project ID”，即可通过 REST 直连浏览项目资产与任务。";
+
+function setGeeRestGuide(message) {
+  elements.geeRestGuide.textContent = message;
+  elements.geeRestGuide.classList.toggle("hidden", !message);
+}
+
+function setGeeRestStatus(message) {
+  elements.geeRestStatus.textContent = message;
+  elements.geeRestStatus.classList.toggle("hidden", !message);
+}
+
+// Sequential on purpose: the first call may open the interactive auth flow,
+// and the second one reuses the session-cached token.
+async function refreshGeeRest() {
+  geeAssetItems = [];
+  geeAssetNextToken = "";
+  renderGeeAssets();
+  await loadGeeAssets("");
+  await loadGeeTasks();
+}
+
+async function loadGeeAssets(pageToken = "") {
+  if (geeRestLoading) return;
+  if (!geeRestConfigured()) {
+    setGeeRestGuide(GEE_REST_GUIDE);
+    setGeeRestStatus("");
+    renderGeeAssets();
+    return;
+  }
+  setGeeRestGuide("");
+  geeRestLoading = true;
+  elements.geeRestRefreshButton.disabled = true;
+  setGeeRestStatus(pageToken ? "正在加载下一页资产…" : "正在授权并加载资产 / 任务…");
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "GEE_REST_LIST_ASSETS",
+      payload: { requestId: crypto.randomUUID(), pageToken }
+    });
+    if (!response?.ok) throw new Error(response?.error || "加载资产失败");
+    geeAssetItems = pageToken ? [...geeAssetItems, ...response.items] : response.items;
+    geeAssetNextToken = response.nextPageToken || "";
+    renderGeeAssets();
+    setGeeRestStatus("");
+  } catch (error) {
+    if (/请先在设置中填写/.test(safeError(error))) {
+      setGeeRestGuide(GEE_REST_GUIDE);
+      setGeeRestStatus("");
+    } else {
+      setGeeRestStatus(`加载失败：${safeError(error)}`);
+    }
+  } finally {
+    geeRestLoading = false;
+    elements.geeRestRefreshButton.disabled = false;
+  }
+}
+
+async function loadGeeTasks() {
+  if (geeRestLoading) return;
+  if (!geeRestConfigured()) {
+    renderGeeTasks();
+    return;
+  }
+  geeRestLoading = true;
+  elements.geeRestRefreshButton.disabled = true;
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "GEE_REST_LIST_TASKS",
+      payload: { requestId: crypto.randomUUID() }
+    });
+    if (!response?.ok) throw new Error(response?.error || "加载任务失败");
+    geeTaskItems = response.items;
+    renderGeeTasks();
+    setGeeRestStatus("");
+  } catch (error) {
+    if (/请先在设置中填写/.test(safeError(error))) {
+      setGeeRestGuide(GEE_REST_GUIDE);
+    } else {
+      setGeeRestStatus(`加载失败：${safeError(error)}`);
+    }
+  } finally {
+    geeRestLoading = false;
+    elements.geeRestRefreshButton.disabled = false;
+  }
+}
+
+function renderGeeAssets() {
+  const list = elements.geeAssetList;
+  list.replaceChildren();
+  if (!geeAssetItems.length) {
+    if (geeRestConfigured()) {
+      const empty = document.createElement("p");
+      empty.className = "hint";
+      empty.textContent = "暂无资产";
+      list.appendChild(empty);
+    }
+  }
+  for (const item of geeAssetItems) {
+    const row = document.createElement("div");
+    row.className = "gee-rest-item";
+    const main = document.createElement("div");
+    main.className = "gee-rest-item-main";
+    const name = document.createElement("span");
+    name.className = "gee-rest-item-name";
+    name.textContent = item.name;
+    name.title = item.id;
+    const type = document.createElement("span");
+    type.className = "gee-rest-item-type";
+    type.textContent = item.type;
+    main.append(name, type);
+    const actions = document.createElement("div");
+    actions.className = "gee-rest-item-actions";
+    const copyButton = document.createElement("button");
+    copyButton.type = "button";
+    copyButton.textContent = "复制 ID";
+    copyButton.addEventListener("click", () => {
+      navigator.clipboard.writeText(item.id)
+        .then(() => setStatus("已复制资产 ID"))
+        .catch(showError);
+    });
+    const injectButton = document.createElement("button");
+    injectButton.type = "button";
+    injectButton.textContent = "注入对话";
+    injectButton.addEventListener("click", () => injectAssetIntoPrompt(item.id));
+    actions.append(copyButton, injectButton);
+    row.append(main, actions);
+    list.appendChild(row);
+  }
+  elements.geeAssetMoreButton.classList.toggle("hidden", !geeAssetNextToken);
+}
+
+function injectAssetIntoPrompt(assetId) {
+  const marker = `资产: ${assetId}`;
+  const current = elements.prompt.value;
+  elements.prompt.value = current ? `${current}\n${marker}` : marker;
+  elements.prompt.focus();
+  setStatus("已把资产 ID 注入输入框");
+}
+
+function renderGeeTasks() {
+  const list = elements.geeTaskList;
+  list.replaceChildren();
+  if (!geeTaskItems.length) {
+    if (geeRestConfigured()) {
+      const empty = document.createElement("p");
+      empty.className = "hint";
+      empty.textContent = "暂无任务";
+      list.appendChild(empty);
+    }
+    return;
+  }
+  for (const item of geeTaskItems) {
+    const row = document.createElement("div");
+    row.className = "gee-rest-item";
+    const main = document.createElement("div");
+    main.className = "gee-rest-item-main";
+    const name = document.createElement("span");
+    name.className = "gee-rest-item-name";
+    name.textContent = item.name || "（未命名任务）";
+    const state = document.createElement("span");
+    state.className = "gee-rest-item-type";
+    state.textContent = item.state;
+    main.append(name, state);
+    row.appendChild(main);
+    if (item.summary) {
+      const summary = document.createElement("p");
+      summary.className = "hint";
+      summary.textContent = item.summary;
+      row.appendChild(summary);
+    }
+    list.appendChild(row);
+  }
 }
 
 async function restoreChatHistory() {

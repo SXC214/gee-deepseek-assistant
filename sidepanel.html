@@ -48,6 +48,15 @@
             Earth Engine Project ID（可选）
             <input id="projectId" name="projectId" type="text" placeholder="your-cloud-project">
           </label>
+          <label>
+            Google OAuth 客户端 ID（可选）
+            <input id="geeClientId" name="geeClientId" type="text" autocomplete="off" placeholder="xxxx.apps.googleusercontent.com">
+          </label>
+          <p class="hint">用于 Earth Engine REST 直连（浏览资产 / 任务）：需在 Google Cloud Console 创建 OAuth 客户端（Web 应用），并把下方重定向 URI 添加到该客户端。客户端 ID 不是密钥，只保存在本浏览器。</p>
+          <div class="gee-redirect-row">
+            <code id="geeRedirectUri" class="gee-redirect-uri">尚未获取到重定向 URI</code>
+            <button id="copyRedirectUriButton" class="compact-button" type="button">复制</button>
+          </div>
           <label class="check-row">
             <input id="rememberApiKey" name="rememberApiKey" type="checkbox">
             <span>在本机持久保存 API Key</span>
@@ -88,6 +97,32 @@
           <div class="editor-actions">
             <button id="readButton" class="compact-button" type="button">读取</button>
             <button id="runButton" class="compact-button" type="button">运行</button>
+            <button id="geeRestButton" class="compact-button" type="button" aria-controls="geeRestPanel" aria-expanded="false">资产/任务</button>
+          </div>
+        </section>
+
+        <section id="geeRestPanel" class="gee-rest-panel hidden" aria-label="Earth Engine 资产与任务" aria-hidden="true">
+          <div class="gee-rest-header">
+            <strong>资产 / 任务</strong>
+            <div class="button-row compact">
+              <button id="geeRestRefreshButton" class="compact-button" type="button">刷新</button>
+              <button id="geeRestCloseButton" class="compact-button" type="button">收起</button>
+            </div>
+          </div>
+          <p id="geeRestGuide" class="hint hidden"></p>
+          <p id="geeRestStatus" class="hint hidden"></p>
+          <div class="gee-rest-columns">
+            <div class="gee-rest-column">
+              <div class="gee-rest-column-header">
+                <span>资产</span>
+                <button id="geeAssetMoreButton" class="compact-button hidden" type="button">加载下一页</button>
+              </div>
+              <div id="geeAssetList" class="gee-rest-list"></div>
+            </div>
+            <div class="gee-rest-column">
+              <div class="gee-rest-column-header"><span>任务</span></div>
+              <div id="geeTaskList" class="gee-rest-list"></div>
+            </div>
           </div>
         </section>
 
