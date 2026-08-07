@@ -36,6 +36,7 @@ const sentinel = {
 let session = createPlanSession("计算 2000-2020 年广州市 NDVI 均值变化");
 assert.equal(session.state, "idle");
 assert.equal(session.revision, 0);
+assert.equal(session.planRevision, 0);
 
 const merged = mergeSources([landsat], [
   { ...landsat, url: `${landsat.url}?utm=one`, summary: "Dataset Availability 1984-03-16T00:00:00Z–2012-05-05T00:00:00Z" },
@@ -63,6 +64,8 @@ assert.equal(validatePlanResponse(needsClarification, merged).valid, true);
 session = applyPlanResponse(session, needsClarification);
 assert.equal(session.state, "clarifying");
 assert.equal(session.revision, 1);
+assert.equal(session.planRevision, 1);
+assert.equal(session.plan.questions[0].prompt, "使用哪个行政区边界版本？");
 
 const incompleteReady = {
   ...needsClarification,
@@ -136,9 +139,136 @@ const ready = {
   questions: []
 };
 assert.equal(validatePlanResponse(ready, merged).valid, true);
+assert.match(
+  validatePlanResponse(ready, merged, { requireTodoWorkflow: true }).errors.join("\n"),
+  /requires field phase/
+);
+
+const todoTasks = [
+  {
+    id: "todo_1",
+    title: "拆解分析需求",
+    objective: "识别目标、时空范围、统计口径和输出",
+    evidenceNeeded: ["用户原始需求"],
+    status: "completed",
+    result: "已识别 NDVI、广州市、2000-2020 年和年度变化目标"
+  },
+  {
+    id: "todo_2",
+    title: "核验官方数据集",
+    objective: "核验候选数据集身份与覆盖期",
+    evidenceNeeded: ["Earth Engine Data Catalog"],
+    status: "completed",
+    result: "已核验 Landsat、MODIS 和 Sentinel-2 官方条目"
+  },
+  {
+    id: "todo_3",
+    title: "澄清统计口径",
+    objective: "确认年度合成和区域统计定义",
+    evidenceNeeded: ["用户明确选择"],
+    status: "in_progress",
+    result: ""
+  },
+  {
+    id: "todo_4",
+    title: "形成可审阅方案",
+    objective: "整合数据、方法、风险和输出",
+    evidenceNeeded: ["已完成任务与用户答复"],
+    status: "pending",
+    result: ""
+  }
+];
+const todoClarifying = {
+  status: "needs_clarification",
+  phase: "clarifying",
+  todoList: todoTasks,
+  completedThisTurn: ["todo_1", "todo_2"],
+  currentTodoId: "todo_3",
+  nextTodoId: "todo_4",
+  goal: ready.goal,
+  researchSummary: "MODIS 覆盖完整时段，Landsat 可提供更高空间分辨率但需跨传感器一致化。",
+  datasets: ready.datasets,
+  requirements: {
+    ...ready.requirements,
+    temporalAggregation: "待用户确认"
+  },
+  method: ["核验数据集", "确认统计口径后形成方案"],
+  outputs: ready.outputs,
+  assumptions: [],
+  risks: ["跨传感器长序列需要一致化"],
+  revisionSummary: ["首次建立 TODO 并完成官方数据集核验"],
+  questions: [{
+    id: "aggregation",
+    prompt: "如何定义年度 NDVI 均值？",
+    options: [
+      { id: "annual", label: "逐年均值", description: "每年全部有效观测聚合", recommended: true },
+      { id: "seasonal", label: "生长季均值", description: "只统计指定月份", recommended: false }
+    ],
+    allowFreeText: true
+  }]
+};
+let todoSession = createPlanSession("计算 2000-2020 年广州市 NDVI 均值变化", { workflow: "todo_v1" });
+todoSession = { ...todoSession, sources: merged };
+assert.equal(todoSession.workflow, "todo_v1");
+assert.equal(validatePlanResponse(todoClarifying, merged, { requireTodoWorkflow: true }).valid, true);
+todoSession = applyPlanResponse(todoSession, todoClarifying);
+assert.equal(todoSession.plan.todoList.length, 4);
+assert.equal(todoSession.plan.currentTodoId, "todo_3");
+todoSession = addPlanAnswer(todoSession, "选择逐年均值。");
+const todoReady = {
+  ...ready,
+  phase: "reviewing",
+  todoList: todoTasks.map((todo) => ({
+    ...todo,
+    status: "completed",
+    result: todo.result || (todo.id === "todo_3" ? "用户选择逐年均值" : "已形成可审阅方案")
+  })),
+  completedThisTurn: ["todo_3", "todo_4"],
+  currentTodoId: "",
+  nextTodoId: "",
+  researchSummary: "已核验官方来源并明确逐年均值口径。",
+  assumptions: [],
+  risks: ["Landsat 跨传感器一致化"],
+  revisionSummary: ["按用户答复确定逐年均值并完成方案"]
+};
+assert.equal(validatePlanResponse(todoReady, merged, { requireTodoWorkflow: true }).valid, true);
+todoSession = applyPlanResponse(todoSession, todoReady);
+assert.equal(todoSession.state, "ready");
+assert.equal(restorePlanSession(serializePlanSession(todoSession)).workflow, "todo_v1");
+
+const independentlyCompletedTodo = structuredClone(todoClarifying);
+independentlyCompletedTodo.todoList[1].status = "pending";
+independentlyCompletedTodo.todoList[1].result = "";
+independentlyCompletedTodo.todoList[2].status = "completed";
+independentlyCompletedTodo.todoList[2].result = "官方来源调研可独立完成";
+independentlyCompletedTodo.completedThisTurn = ["todo_1", "todo_3"];
+independentlyCompletedTodo.currentTodoId = "";
+independentlyCompletedTodo.nextTodoId = "todo_2";
+assert.equal(
+  validatePlanResponse(independentlyCompletedTodo, merged, { requireTodoWorkflow: true }).valid,
+  true,
+  "independent research may complete while an earlier clarification remains pending"
+);
+
+const multipleInProgress = structuredClone(todoClarifying);
+multipleInProgress.todoList[1].status = "in_progress";
+assert.match(
+  validatePlanResponse(multipleInProgress, merged, { requireTodoWorkflow: true }).errors.join("\n"),
+  /at most one in_progress/
+);
+const prematureSession = { ...createPlanSession("计算 2000-2020 年广州市 NDVI 均值变化"), sources: merged };
+assert.throws(
+  () => applyPlanResponse(prematureSession, ready),
+  /at least one user clarification/
+);
+session = addPlanAnswer(session, "使用 GADM/GAUL 中可复现的广州市边界，并采用推荐年均口径。");
+assert.equal(session.state, "clarifying");
+assert.equal(session.planStale, true);
+assert.equal(session.revision, 2);
 session = applyPlanResponse(session, ready);
 assert.equal(session.state, "ready");
-assert.equal(session.revision, 2);
+assert.equal(session.revision, 3);
+assert.equal(session.planRevision, 2);
 
 const sentinelOnly = {
   ...structuredClone(ready),
@@ -176,7 +306,8 @@ const revised = addPlanAnswer(session, "只统计 4 月到 10 月。");
 assert.equal(revised.state, "clarifying");
 assert.equal(revised.planStale, true);
 assert.equal(revised.userTurns.at(-1), "只统计 4 月到 10 月。");
-assert.equal(revised.revision, 3);
+assert.equal(revised.revision, 4);
+assert.equal(revised.planRevision, 2);
 
 const stored = JSON.parse(serializePlanSession(setPlanState(revised, "researching")));
 stored.apiKey = "must not persist";
@@ -184,14 +315,21 @@ stored.console = "must not persist";
 const restored = restorePlanSession(stored);
 assert.equal(restored.state, "clarifying");
 assert.equal(restored.stableState, "clarifying");
+assert.equal(restored.planRevision, 2);
 assert.equal("apiKey" in restored, false);
 assert.equal("console" in restored, false);
 assert.equal(restorePlanSession("not json"), null);
+
+const redactedPlan = createPlanSession("分析 NDVI，令牌 Bearer abcdefghijklmnopqrstuvwxyz");
+assert.equal(redactedPlan.originalRequest, "分析 NDVI，令牌 Bearer [已隐藏令牌]");
+const redactedAnswer = addPlanAnswer(redactedPlan, "API Key 是 sk-abcdefghijklmnopqrstuvwxyz");
+assert.equal(redactedAnswer.userTurns[0], "API Key 是 [已隐藏 API Key]");
 
 const validInterrupted = sanitizePlanSession({
   originalRequest: "x",
   state: "generating",
   stableState: "ready",
+  userTurns: ["确认默认方案"],
   plan: ready,
   sources: merged
 });

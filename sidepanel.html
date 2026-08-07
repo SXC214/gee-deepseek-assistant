@@ -7,21 +7,28 @@
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
-    <header class="app-header">
-      <div class="header-leading">
-        <button id="settingsButton" class="icon-button" type="button" aria-label="打开模型与项目设置" aria-controls="settingsPanel" aria-expanded="false">⚙</button>
-        <div>
-          <h1>GEE AI 助手</h1>
-          <p>DeepSeek / OpenAI 兼容接口</p>
+    <div class="app-shell">
+      <header class="app-header">
+        <div class="header-leading">
+          <button id="settingsButton" class="icon-button" type="button" aria-label="打开模型与项目设置" aria-controls="settingsPanel" aria-expanded="false">⚙</button>
+          <div class="brand-copy">
+            <h1>GEE AI 助手</h1>
+            <p>分析、计划与代码协作</p>
+          </div>
         </div>
-      </div>
-      <span id="connectionBadge" class="badge muted">未连接</span>
-    </header>
+        <div class="header-actions">
+          <button id="clearChatButton" class="icon-button" type="button" aria-label="开始新对话" title="新对话">＋</button>
+          <span id="connectionBadge" class="badge muted">未连接</span>
+        </div>
+      </header>
 
-    <main>
-      <section class="settings-card hidden" id="settingsPanel" aria-label="模型与项目设置">
+      <div id="settingsBackdrop" class="settings-backdrop hidden"></div>
+      <aside class="settings-card settings-drawer hidden" id="settingsPanel" aria-label="模型与项目设置" aria-hidden="true">
         <div class="settings-header">
-          <strong>模型与项目设置</strong>
+          <div>
+            <strong>模型与项目设置</strong>
+            <p class="hint">仅保存在当前浏览器扩展中</p>
+          </div>
           <button id="closeSettingsButton" class="icon-button" type="button" aria-label="关闭设置">×</button>
         </div>
         <form id="settingsForm">
@@ -45,96 +52,159 @@
             <input id="rememberApiKey" name="rememberApiKey" type="checkbox">
             <span>在本机持久保存 API Key</span>
           </label>
-          <label class="check-row">
-            <input id="thinkingEnabled" name="thinkingEnabled" type="checkbox" checked>
-            <span>启用 DeepSeek V4 思考模式</span>
-          </label>
-          <label>
-            思考强度
-            <select id="reasoningEffort" name="reasoningEffort">
-              <option value="high">High（默认）</option>
-              <option value="max">Max（复杂任务）</option>
-            </select>
-          </label>
-          <p id="providerCapabilityHint" class="hint">官方 DeepSeek V4 支持实时思考；其他兼容接口会自动使用普通模式。</p>
+          <div class="settings-section">
+            <label class="check-row">
+              <input id="thinkingEnabled" name="thinkingEnabled" type="checkbox" checked>
+              <span>启用 DeepSeek V4 思考模式</span>
+            </label>
+            <label>
+              思考强度
+              <select id="reasoningEffort" name="reasoningEffort">
+                <option value="high">High（默认）</option>
+                <option value="max">Max（复杂任务）</option>
+              </select>
+            </label>
+            <p id="providerCapabilityHint" class="hint">官方 DeepSeek V4 支持实时思考；其他兼容接口会自动使用普通模式。</p>
+          </div>
           <div class="button-row">
             <button class="primary" type="submit">保存设置</button>
             <button id="clearKeyButton" type="button">清除密钥</button>
           </div>
           <p id="keyStatus" class="hint"></p>
         </form>
-      </section>
+      </aside>
 
-      <section class="editor-card">
-        <div>
-          <strong id="scriptTitle">尚未读取脚本</strong>
-          <p id="scriptMeta">打开 Earth Engine Code Editor 后读取。</p>
-        </div>
-        <div class="button-row compact">
-          <button id="readButton" type="button">读取代码</button>
-          <button id="runButton" type="button">运行脚本</button>
-        </div>
-      </section>
+      <main class="app-main">
+        <section class="editor-context" aria-label="Earth Engine 编辑器上下文">
+          <span id="editorConnectionDot" class="connection-dot" aria-hidden="true"></span>
+          <div class="editor-context-copy">
+            <strong id="scriptTitle">尚未读取脚本</strong>
+            <span id="scriptMeta">打开 Earth Engine Code Editor 后读取</span>
+          </div>
+          <div class="editor-actions">
+            <button id="readButton" class="compact-button" type="button">读取</button>
+            <button id="runButton" class="compact-button" type="button">运行</button>
+          </div>
+        </section>
 
-      <section id="toolResults" class="tool-results hidden">
-        <div class="candidate-header">
-          <strong>官方资料</strong>
-          <span id="toolResultCount" class="badge"></span>
-        </div>
-        <div id="toolSourceList" class="tool-source-list"></div>
-        <p id="toolWarnings" class="hint warning-text"></p>
-      </section>
+        <section class="chat-card" aria-labelledby="conversationTitle">
+          <div class="chat-header">
+            <div>
+              <strong id="conversationTitle">当前对话</strong>
+              <span class="chat-subtitle">回答、活动、计划和代码按时间排列</span>
+            </div>
+            <span id="turnStateBadge" class="badge muted">就绪</span>
+          </div>
 
-      <section id="planPanel" class="plan-card hidden" aria-live="polite">
-        <div class="candidate-header">
-          <strong>分析计划</strong>
-          <span id="planStatusBadge" class="badge muted">未开始</span>
-        </div>
-        <div id="planContent" class="plan-content"></div>
-        <div id="planActions" class="button-row hidden">
-          <button id="confirmPlanButton" class="primary" type="button">确认方案并生成代码</button>
-          <button id="continuePlanButton" type="button">继续澄清</button>
-          <button id="cancelPlanButton" type="button">取消计划</button>
-        </div>
-      </section>
+          <section id="conversation" class="conversation" role="log" aria-live="polite" aria-relevant="additions text">
+            <div id="conversationEmpty" class="conversation-empty">
+              <strong>从一个 GEE 分析任务开始</strong>
+              <span>可以直接修复代码，也可以先进入计划模式调研数据和方法。</span>
+              <div class="starter-list">
+                <button class="starter-prompt" type="button" data-prompt="检查当前 GEE 脚本的报错并给出完整修复代码">检查并修复当前脚本</button>
+                <button class="starter-prompt" type="button" data-plan="true" data-prompt="帮我规划一个多年 NDVI 均值变化分析，先比较可用数据集并澄清统计口径">规划多年 NDVI 分析</button>
+              </div>
+            </div>
 
-      <section id="conversation" class="conversation" aria-live="polite"></section>
+            <details id="toolResults" class="tool-results activity-card hidden" aria-label="本轮官方资料" open>
+              <summary>
+                <span id="toolActivityTitle">检索官方资料</span>
+                <span id="toolResultCount" class="activity-count"></span>
+              </summary>
+              <div class="activity-body">
+                <div id="toolSourceList" class="tool-source-list"></div>
+                <p id="toolWarnings" class="hint warning-text"></p>
+              </div>
+            </details>
 
-      <section id="candidatePanel" class="candidate hidden">
-        <div class="candidate-header">
-          <strong>建议修改</strong>
-          <span id="diffStats" class="badge"></span>
-        </div>
-        <pre id="diffView" class="diff-view"></pre>
-        <div class="button-row">
-          <button id="applyButton" class="primary" type="button">替换完整脚本</button>
-          <button id="insertButton" type="button">插入到光标</button>
-          <button id="dismissButton" type="button">忽略</button>
-        </div>
-        <p class="hint">写入前会检查脚本是否被修改；可在 Ace 编辑器中使用 Ctrl+Z 撤销。</p>
-      </section>
+            <section id="planPanel" class="plan-card activity-card hidden" aria-live="polite">
+              <div class="message-meta"><span>GEE AI · 计划</span></div>
+              <div class="candidate-header">
+                <strong id="planTitle">计划模式</strong>
+                <div class="badge-row">
+                  <span id="planRevisionBadge" class="badge muted">草案</span>
+                  <span id="planStatusBadge" class="badge muted">未开始</span>
+                </div>
+              </div>
+              <div id="planContent" class="plan-content"></div>
+              <div id="planActions" class="button-row hidden">
+                <button id="confirmPlanButton" class="primary" type="button">采用方案并生成代码</button>
+                <button id="continuePlanButton" type="button">要求修改</button>
+                <button id="cancelPlanButton" type="button">取消计划</button>
+              </div>
+            </section>
 
-      <form id="promptForm" class="prompt-card">
-        <textarea id="prompt" rows="5" placeholder="例如：修复当前报错，并优化 Sentinel-2 云掩膜代码" required></textarea>
-        <div class="context-options">
-          <label class="check-row"><input id="includeCode" type="checkbox" checked><span>当前代码</span></label>
-          <label class="check-row"><input id="includeSelection" type="checkbox" checked><span>选中代码</span></label>
-          <label class="check-row"><input id="includeConsole" type="checkbox" checked><span>Console</span></label>
-          <label class="check-row mode-toggle"><input id="planMode" type="checkbox"><span>计划模式</span></label>
-        </div>
-        <p id="planModeHint" class="hint hidden">计划模式会先检索官方资料并澄清需求，确认方案后才生成代码。</p>
-        <div class="tool-options">
-          <span>工具</span>
-          <label class="check-row"><input id="datasetSearch" type="checkbox" checked><span>Dataset Search</span></label>
-          <label class="check-row"><input id="docsSearch" type="checkbox" checked><span>Docs Search</span></label>
-        </div>
-        <div class="button-row send-row">
-          <span id="statusText" class="status">就绪</span>
-          <button id="stopButton" type="button" class="hidden">停止</button>
-          <button id="sendButton" class="primary" type="submit">发送</button>
-        </div>
-      </form>
-    </main>
+            <section id="candidatePanel" class="candidate candidate-message activity-card hidden" aria-live="polite">
+              <div class="message-meta"><span>GEE AI · 代码结果</span></div>
+              <div class="candidate-header">
+                <strong id="candidateTitle">建议修改</strong>
+                <div class="badge-row">
+                  <span id="diffStats" class="badge"></span>
+                  <span id="candidateStatusBadge" class="badge muted">待应用</span>
+                </div>
+              </div>
+              <pre id="diffView" class="diff-view"></pre>
+              <details class="candidate-code-details">
+                <summary>查看完整代码</summary>
+                <pre id="candidateCodeView" class="candidate-code-view"></pre>
+              </details>
+              <div class="button-row">
+                <button id="applyButton" class="primary" type="button">替换完整脚本</button>
+                <button id="insertButton" type="button">插入到光标</button>
+                <button id="copyButton" type="button">复制代码</button>
+                <button id="dismissButton" type="button">关闭代码卡</button>
+              </div>
+              <p id="candidateHint" class="hint">写入前会检查脚本是否被修改；可在 Ace 编辑器中使用 Ctrl+Z 撤销。</p>
+            </section>
+          </section>
+
+          <button id="scrollToLatestButton" class="scroll-latest hidden" type="button" aria-label="回到最新消息" aria-hidden="true">↓ 回到最新</button>
+        </section>
+
+        <form id="promptForm" class="prompt-card">
+          <section id="queuePanel" class="queue-panel hidden" aria-label="后续消息队列">
+            <div class="queue-header">
+              <strong>后续消息 <span id="queueCount"></span></strong>
+              <div class="button-row compact">
+                <button id="resumeQueueButton" class="compact-button hidden" type="button">继续队列</button>
+                <button id="clearQueueButton" class="compact-button" type="button">清空</button>
+              </div>
+            </div>
+            <div id="queueList" class="queue-list"></div>
+          </section>
+
+          <textarea id="prompt" rows="3" placeholder="描述你的 GEE 任务；Enter 换行，Ctrl+Enter 发送" required></textarea>
+
+          <div class="composer-toolbar">
+            <div class="composer-mode-switch" role="group" aria-label="对话模式">
+              <button id="directModeButton" class="mode-button selected" type="button" aria-pressed="true">问答</button>
+              <button id="planModeButton" class="mode-button" type="button" aria-pressed="false">计划</button>
+              <input id="planMode" class="hidden" type="checkbox" tabindex="-1" aria-hidden="true">
+            </div>
+            <div class="context-options" aria-label="附加上下文">
+              <label class="context-chip"><input id="includeCode" type="checkbox" checked><span>代码</span></label>
+              <label class="context-chip"><input id="includeSelection" type="checkbox" checked><span>选区</span></label>
+              <label id="consoleContextChip" class="context-chip">
+                <input id="includeConsole" type="checkbox" checked aria-label="包含 Earth Engine Console 上下文">
+                <span id="includeConsoleLabel" aria-live="polite">Console</span>
+              </label>
+            </div>
+          </div>
+
+          <p id="planModeHint" class="hint hidden">计划模式会先检索官方资料、讨论关键假设；采用方案后才会生成代码。</p>
+          <div class="tool-options">
+            <span>官方工具</span>
+            <label class="context-chip"><input id="datasetSearch" type="checkbox" checked><span>Dataset</span></label>
+            <label class="context-chip"><input id="docsSearch" type="checkbox" checked><span>Docs</span></label>
+          </div>
+          <div class="button-row send-row">
+            <span id="statusText" class="status">就绪</span>
+            <button id="stopButton" type="button" class="hidden">停止</button>
+            <button id="sendButton" class="primary send-button" type="submit" disabled>发送</button>
+          </div>
+        </form>
+      </main>
+    </div>
 
     <script type="module" src="sidepanel.js"></script>
   </body>

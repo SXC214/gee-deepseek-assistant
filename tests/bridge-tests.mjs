@@ -4,12 +4,35 @@ import vm from "node:vm";
 
 let code = "var x = 1;\nprint(x);";
 let focused = false;
-let selection = { start: { row: 0, column: 0 }, end: { row: 0, column: 0 } };
+let lastReplaceRange = null;
+
+class FakeRange {
+  constructor(startRow, startColumn, endRow, endColumn) {
+    this.start = { row: startRow, column: startColumn };
+    this.end = { row: endRow, column: endColumn };
+  }
+
+  isEmpty() {
+    return this.start.row === this.end.row && this.start.column === this.end.column;
+  }
+
+  setStart(row, column) {
+    this.start = { row, column };
+  }
+
+  setEnd(row, column) {
+    this.end = { row, column };
+  }
+}
+
+let selection = new FakeRange(0, 0, 0, 0);
 
 const session = {
   getValue: () => code,
   getTextRange: (range) => range.start.row === range.end.row && range.start.column === range.end.column ? "" : "var x = 1;",
   replace: (range, text) => {
+    if (typeof range.isEmpty !== "function") throw new TypeError("e.isEmpty is not a function");
+    lastReplaceRange = range;
     if (range.start.row === 0 && range.start.column === 0 && range.end.row === 1) code = text;
     else code += text;
   }
@@ -21,7 +44,7 @@ const editor = {
   getCursorPosition: () => ({ row: 0, column: 0 }),
   insert: (text) => { code += text; },
   moveCursorTo: () => {},
-  clearSelection: () => { selection = { start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }; },
+  clearSelection: () => { selection = new FakeRange(0, 0, 0, 0); },
   focus: () => { focused = true; }
 };
 
@@ -76,6 +99,7 @@ const applied = await request("APPLY_CODE", {
 });
 assert.equal(applied.ok, true);
 assert.equal(code, "var y = 2;\nprint(y);");
+assert.equal(typeof lastReplaceRange.isEmpty, "function");
 assert.equal(focused, true);
 
 console.log("Bridge tests passed.");

@@ -84,7 +84,16 @@
     } else if (mode === "replace_all") {
       const lines = current.split("\n");
       const end = { row: lines.length - 1, column: lines.at(-1).length };
-      editor.session.replace({ start: { row: 0, column: 0 }, end }, text);
+      const range = createEditorRange(editor, { row: 0, column: 0 }, end);
+      if (range) {
+        editor.session.replace(range, text);
+      } else if (typeof editor.setValue === "function") {
+        editor.setValue(text, -1);
+      } else if (typeof editor.session.setValue === "function") {
+        editor.session.setValue(text);
+      } else {
+        throw new Error("当前 Earth Engine 编辑器不支持完整脚本替换，请刷新页面后重试");
+      }
       editor.moveCursorTo(0, 0);
       editor.clearSelection();
     } else {
@@ -94,6 +103,20 @@
     editor.focus();
     const updated = editor.session.getValue();
     return { revision: hash(updated), length: updated.length };
+  }
+
+  function createEditorRange(editor, start, end) {
+    const range = editor.getSelectionRange?.();
+    if (!range || typeof range.isEmpty !== "function") return null;
+
+    if (typeof range.setStart === "function" && typeof range.setEnd === "function") {
+      range.setStart(start.row, start.column);
+      range.setEnd(end.row, end.column);
+    } else {
+      range.start = { row: start.row, column: start.column };
+      range.end = { row: end.row, column: end.column };
+    }
+    return range;
   }
 
   function plainRange(range) {

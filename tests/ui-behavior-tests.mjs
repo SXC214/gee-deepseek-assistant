@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import {
   createReasoningView,
+  countPlanAnswerBlocks,
   getPlanActionState,
+  isNearScrollEnd,
+  resolveStatusState,
+  setComposerModeView,
   setPlanToolControls,
+  setScrollToLatestVisibility,
   setSettingsPanelOpen,
-  setThinkingControlEnabled
+  setStatusView,
+  setThinkingControlEnabled,
+  upsertPlanAnswerText
 } from "../lib/ui.js";
 
 class FakeClassList {
@@ -36,6 +43,9 @@ class FakeElement {
     this.focused = false;
     this.scrollTop = 0;
     this.scrollHeight = 1;
+    this.clientHeight = 1;
+    this.dataset = {};
+    this.title = "";
   }
 
   set className(value) {
@@ -81,16 +91,48 @@ setSettingsPanelOpen({ panel: settingsPanel, button: settingsButton, keyInput },
 assert.equal(settingsPanel.classList.contains("hidden"), false);
 assert.equal(settingsButton.attributes.get("aria-expanded"), "true");
 assert.equal(settingsButton.attributes.get("aria-label"), "关闭模型与项目设置");
+assert.equal(settingsPanel.attributes.get("aria-hidden"), "false");
 assert.equal(keyInput.focused, true);
 setSettingsPanelOpen({ panel: settingsPanel, button: settingsButton, keyInput }, false);
 assert.equal(settingsPanel.classList.contains("hidden"), true);
 assert.equal(settingsButton.attributes.get("aria-expanded"), "false");
+assert.equal(settingsPanel.attributes.get("aria-hidden"), "true");
+
+const directModeButton = new FakeElement("button");
+const planModeButton = new FakeElement("button");
+const planModeInput = new FakeElement("input");
+setComposerModeView({ directModeButton, planModeButton, planMode: planModeInput }, true);
+assert.equal(planModeInput.checked, true);
+assert.equal(planModeButton.classList.contains("selected"), true);
+assert.equal(planModeButton.attributes.get("aria-pressed"), "true");
+assert.equal(directModeButton.attributes.get("aria-pressed"), "false");
+
+const latestButton = new FakeElement("button", ["hidden"]);
+assert.equal(setScrollToLatestVisibility(latestButton, false, { hasOverflow: true }), true);
+assert.equal(latestButton.classList.contains("hidden"), false);
+assert.equal(latestButton.attributes.get("aria-hidden"), "false");
+assert.equal(setScrollToLatestVisibility(latestButton, true, { hasOverflow: true }), false);
+assert.equal(latestButton.classList.contains("hidden"), true);
 
 const effort = new FakeElement("select");
 setThinkingControlEnabled(effort, false);
 assert.equal(effort.disabled, true);
 setThinkingControlEnabled(effort, true);
 assert.equal(effort.disabled, false);
+
+const statusView = new FakeElement("span");
+assert.equal(setStatusView(statusView, "正在整理分析计划…"), "processing");
+assert.equal(statusView.classList.contains("status-processing"), true);
+assert.equal(statusView.attributes.get("aria-busy"), "true");
+assert.equal(setStatusView(statusView, "代码已生成"), "success");
+assert.equal(statusView.classList.contains("status-success"), true);
+assert.equal(setStatusView(statusView, "请求失败"), "error");
+assert.equal(statusView.classList.contains("status-error"), true);
+assert.match(statusView.textContent, /请检查聊天框输出信息/);
+assert.equal(resolveStatusState("请求已停止", { busy: false }), "idle");
+
+assert.equal(isNearScrollEnd({ scrollHeight: 500, clientHeight: 300, scrollTop: 160 }, 48), true);
+assert.equal(isNearScrollEnd({ scrollHeight: 500, clientHeight: 300, scrollTop: 80 }, 48), false);
 
 const planControls = {
   hint: new FakeElement("p", ["hidden"]),
@@ -101,6 +143,7 @@ const planControls = {
 setPlanToolControls(planControls, {
   enabled: true,
   busy: false,
+  panelVisible: true,
   savedDatasetSearch: false,
   savedDocsSearch: false
 });
@@ -129,6 +172,33 @@ assert.deepEqual(getPlanActionState({ hasPlan: true, state: "ready", planStale: 
 assert.equal(getPlanActionState({ hasPlan: true, state: "ready", planStale: true, busy: false }).showConfirm, false);
 assert.equal(getPlanActionState({ hasPlan: true, state: "generating", planStale: false, busy: true }).showContinue, false);
 
+let answerDraft = upsertPlanAnswerText("", {
+  questionId: "time_aggregation",
+  prompt: "您希望 NDVI 均值在时间上如何聚合？",
+  option: { label: "逐年均值", description: "每年计算一个平均 NDVI" }
+});
+answerDraft = `${answerDraft}\n\n额外要求：保留年度时间序列。`;
+answerDraft = upsertPlanAnswerText(answerDraft, {
+  questionId: "spatial_statistic",
+  prompt: "您希望 NDVI 均值在空间上如何统计？",
+  option: { label: "全州区域平均", description: "计算整个区域的平均 NDVI" }
+});
+assert.equal(countPlanAnswerBlocks(answerDraft), 2);
+assert.match(answerDraft, /逐年均值/);
+assert.match(answerDraft, /全州区域平均/);
+assert.match(answerDraft, /额外要求：保留年度时间序列/);
+
+answerDraft = upsertPlanAnswerText(answerDraft, {
+  questionId: "time_aggregation",
+  prompt: "您希望 NDVI 均值在时间上如何聚合？",
+  option: { label: "整个时期单一均值", description: "只输出一个数值" }
+});
+assert.equal(countPlanAnswerBlocks(answerDraft), 2, "reselecting one question must not duplicate its block");
+assert.doesNotMatch(answerDraft, /逐年均值/);
+assert.match(answerDraft, /整个时期单一均值/);
+assert.match(answerDraft, /全州区域平均/);
+assert.match(answerDraft, /额外要求：保留年度时间序列/);
+
 const fakeDocument = { createElement: (tagName) => new FakeElement(tagName) };
 const conversation = new FakeElement("section");
 const reasoning = createReasoningView(fakeDocument, conversation);
@@ -137,11 +207,21 @@ reasoning.append("，第二步");
 assert.equal(conversation.children.length, 1);
 const details = conversation.children[0];
 assert.equal(details.open, true);
-assert.equal(details.querySelector("summary").textContent, "正在思考…");
+assert.equal(details.querySelector("summary").textContent, "思考中");
 assert.equal(details.querySelector("pre").textContent, "第一步，第二步");
+const reasoningOutput = details.querySelector("pre");
+reasoningOutput.scrollHeight = 500;
+reasoningOutput.clientHeight = 100;
+reasoningOutput.scrollTop = 120;
+reasoning.append("，停留阅读");
+assert.equal(reasoningOutput.scrollTop, 120, "scrolling up must pause reasoning auto-follow");
+reasoningOutput.scrollTop = 400;
+reasoning.append("，恢复跟随");
+assert.equal(reasoningOutput.scrollTop, 500, "returning to the bottom must resume auto-follow");
 reasoning.complete();
 assert.equal(details.open, false);
-assert.equal(details.querySelector("summary").textContent, "思考过程（已完成）");
+assert.equal(details.querySelector("summary").textContent, "思考过程 · 已完成");
+assert.equal(details.classList.contains("activity-success"), true);
 reasoning.remove();
 assert.equal(conversation.children.length, 0);
 

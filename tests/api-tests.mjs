@@ -1,11 +1,19 @@
 import assert from "node:assert/strict";
-import { buildChatRequestBody, isOfficialDeepSeekV4, isValidReasoningEffort } from "../lib/api.js";
+import {
+  buildChatRequestBody,
+  isOfficialDeepSeekV4,
+  isOfficialDeepSeekV4Flash,
+  isValidReasoningEffort
+} from "../lib/api.js";
 
 const messages = [{ role: "user", content: "计算 NDVI" }];
 assert.equal(isOfficialDeepSeekV4("https://api.deepseek.com", "deepseek-v4-flash"), true);
 assert.equal(isOfficialDeepSeekV4("https://api.deepseek.com/v1", "deepseek-v4-pro"), true);
 assert.equal(isOfficialDeepSeekV4("https://proxy.example.com", "deepseek-v4-flash"), false);
 assert.equal(isOfficialDeepSeekV4("https://api.deepseek.com", "deepseek-chat"), false);
+assert.equal(isOfficialDeepSeekV4Flash("https://api.deepseek.com/v1", "deepseek-v4-flash"), true);
+assert.equal(isOfficialDeepSeekV4Flash("https://api.deepseek.com", "deepseek-v4-pro"), false);
+assert.equal(isOfficialDeepSeekV4Flash("https://proxy.example.com", "deepseek-v4-flash"), false);
 assert.equal(isValidReasoningEffort("max"), true);
 assert.equal(isValidReasoningEffort("low"), false);
 
