@@ -118,6 +118,9 @@ assert.match(script, /import \{ setWithQuotaEviction \} from "\.\/lib\/storage\.
 assert.match(script, /function reportPersistFailure\(kind, error\)/);
 assert.match(script, /本地保存失败，仅保留在当前会话/);
 assert.match(script, /PERSIST_FAILURE_NOTIFY_COOLDOWN_MS = 10000/);
+assert.match(script, /appendMessage\("user", prompt, \{ purpose: "direct" \}\)/);
+assert.match(script, /\.filter\(\(entry\) => entry\.purpose === "direct" && \["user", "assistant"\]\.includes\(entry\.role\)\)/);
+assert.match(script, /directConversation = alignConversationToUser\(/);
 assert.equal(packageJson.version, manifest.version);
 
 console.log("UI consistency tests passed.");
