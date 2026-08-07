@@ -6,6 +6,7 @@ import {
 } from "./lib/candidate.js";
 import { appendChatEntry, createChatEntry, sanitizeChatHistory, sanitizeChatText } from "./lib/chat.js";
 import { createConsoleContextSection, getConsoleUiState, normalizeConsoleRead } from "./lib/console.js";
+import { alignConversationToUser } from "./lib/conversation.js";
 import { createLineDiff } from "./lib/diff.js";
 import {
   addPlanAnswer,
@@ -241,10 +242,12 @@ async function clearKey() {
 async function restoreChatHistory() {
   const stored = await chrome.storage.local.get(CHAT_HISTORY_KEY);
   chatHistory = sanitizeChatHistory(stored[CHAT_HISTORY_KEY]);
-  directConversation = chatHistory
-    .filter((entry) => entry.purpose === "direct" && ["user", "assistant"].includes(entry.role))
-    .map((entry) => ({ role: entry.role, content: entry.text }))
-    .slice(-12);
+  directConversation = alignConversationToUser(
+    chatHistory
+      .filter((entry) => entry.purpose === "direct" && ["user", "assistant"].includes(entry.role))
+      .map((entry) => ({ role: entry.role, content: entry.text }))
+      .slice(-12)
+  );
   elements.conversation.replaceChildren();
   for (const entry of chatHistory) elements.conversation.appendChild(renderChatEntry(entry));
   syncConversationEmptyState();
@@ -606,7 +609,7 @@ async function runDirectTurn(prompt) {
       { role: "user", content: prompt },
       { role: "assistant", content: response.content }
     );
-    directConversation = directConversation.slice(-12);
+    directConversation = alignConversationToUser(directConversation.slice(-12));
     appendMessage("assistant", stripCodeFences(response.content) || "模型返回了代码修改建议。", { purpose: "direct" });
     const extracted = extractCodeCandidate(response.content);
     if (extracted) showCandidate(extracted, state);
