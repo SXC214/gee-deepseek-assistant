@@ -15,6 +15,8 @@ assert.equal(ids.size, [...html.matchAll(/\bid="([^"]+)"/g)].length, "HTML ids m
 assert.match(html, /id="settingsButton"[^>]*aria-controls="settingsPanel"[^>]*aria-expanded="false"/);
 assert.match(html, /class="settings-card settings-drawer hidden" id="settingsPanel"/);
 assert.match(html, /id="thinkingEnabled"[^>]*checked/);
+assert.match(html, /id="compatibleStreaming"[^>]*type="checkbox"/);
+assert.match(html, /兼容接口启用流式输出（实验性）/);
 assert.match(html, /<option value="high">High（默认）<\/option>/);
 assert.match(html, /<option value="max">Max（复杂任务）<\/option>/);
 assert.match(html, /id="planMode"/);
@@ -121,6 +123,8 @@ assert.match(script, /PERSIST_FAILURE_NOTIFY_COOLDOWN_MS = 10000/);
 assert.match(script, /appendMessage\("user", prompt, \{ purpose: "direct" \}\)/);
 assert.match(script, /\.filter\(\(entry\) => entry\.purpose === "direct" && \["user", "assistant"\]\.includes\(entry\.role\)\)/);
 assert.match(script, /directConversation = alignConversationToUser\(/);
+assert.match(script, /elements\.compatibleStreaming\.checked = currentSettings\.compatibleStreaming === true/);
+assert.match(script, /compatibleStreaming: elements\.compatibleStreaming\.checked/);
 assert.equal(packageJson.version, manifest.version);
 
 console.log("UI consistency tests passed.");

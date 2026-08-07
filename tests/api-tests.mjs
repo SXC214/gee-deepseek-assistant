@@ -67,4 +67,42 @@ assert.equal("reasoning_effort" in compatibility, false);
 assert.equal("stream_options" in compatibility, false);
 assert.equal("response_format" in compatibility, false);
 
+// compatibleStreaming opt-in stays off by default: generic endpoints keep the
+// non-streaming shape even when the caller requests streaming.
+const compatFlagOff = buildChatRequestBody({
+  model: "generic-model", messages,
+  settings: { baseUrl: "https://my-openai-compatible.example/v1", compatibleStreaming: false },
+  stream: true
+});
+assert.equal(compatFlagOff.stream, false);
+
+// Enabled opt-in: only a plain stream flag, no DeepSeek-only fields.
+const compatFlagOn = buildChatRequestBody({
+  model: "generic-model", messages,
+  settings: { baseUrl: "https://my-openai-compatible.example/v1", compatibleStreaming: true },
+  stream: true
+});
+assert.equal(compatFlagOn.stream, true);
+assert.equal("thinking" in compatFlagOn, false);
+assert.equal("reasoning_effort" in compatFlagOn, false);
+assert.equal("stream_options" in compatFlagOn, false);
+assert.equal("response_format" in compatFlagOn, false);
+
+// The opt-in only affects streaming callers; chat() keeps stream:false.
+const compatFlagNonStream = buildChatRequestBody({
+  model: "generic-model", messages,
+  settings: { baseUrl: "https://my-openai-compatible.example/v1", compatibleStreaming: true },
+  stream: false
+});
+assert.equal(compatFlagNonStream.stream, false);
+
+// Official endpoints ignore the flag and keep the full V4 request shape.
+const officialWithFlag = buildChatRequestBody({
+  model: "deepseek-v4-flash", messages,
+  settings: { baseUrl: "https://api.deepseek.com", thinkingEnabled: true, compatibleStreaming: true }
+});
+assert.equal(officialWithFlag.stream, true);
+assert.deepEqual(officialWithFlag.thinking, { type: "enabled" });
+assert.deepEqual(officialWithFlag.stream_options, { include_usage: true });
+
 console.log("API request tests passed.");

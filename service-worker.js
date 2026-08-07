@@ -18,7 +18,8 @@ const DEFAULT_SETTINGS = Object.freeze({
   datasetSearch: true,
   docsSearch: true,
   thinkingEnabled: true,
-  reasoningEffort: "high"
+  reasoningEffort: "high",
+  compatibleStreaming: false
 });
 
 const activeRequests = new Map();
@@ -174,7 +175,8 @@ async function saveSettings(payload) {
     projectId: String(payload.projectId || "").trim(),
     rememberApiKey: Boolean(payload.rememberApiKey),
     thinkingEnabled: payload.thinkingEnabled !== false,
-    reasoningEffort: normalizeReasoningEffort(payload.reasoningEffort)
+    reasoningEffort: normalizeReasoningEffort(payload.reasoningEffort),
+    compatibleStreaming: Boolean(payload.compatibleStreaming)
   };
 
   if (!settings.model) throw new Error("模型名称不能为空");
@@ -326,7 +328,11 @@ async function streamChat(payload, port) {
     throwIfAborted(controller.signal);
     const merged = mergeStoredSettings(settings);
     if (!apiKey) throw new Error("请先在设置中填写 API Key");
-    if (!isOfficialDeepSeekV4(merged.baseUrl, merged.model)) {
+    // Official DeepSeek V4 endpoints always stream. Compatible endpoints may
+    // opt in via settings.compatibleStreaming; they never send or parse the
+    // DeepSeek-only reasoning fields, but share the zero-content retry and
+    // idle-timeout semantics of the official stream path.
+    if (!isOfficialDeepSeekV4(merged.baseUrl, merged.model) && !merged.compatibleStreaming) {
       throw new Error("当前模型接口不支持 DeepSeek V4 实时思考协议");
     }
     const body = buildChatRequestBody({
@@ -756,6 +762,7 @@ function mergeStoredSettings(value) {
     datasetSearch: stored.datasetSearch !== false,
     docsSearch: stored.docsSearch !== false,
     thinkingEnabled: stored.thinkingEnabled !== false,
+    compatibleStreaming: stored.compatibleStreaming === true,
     reasoningEffort: isValidReasoningEffort(stored.reasoningEffort)
       ? String(stored.reasoningEffort).toLowerCase()
       : DEFAULT_SETTINGS.reasoningEffort

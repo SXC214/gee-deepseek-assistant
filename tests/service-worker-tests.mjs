@@ -407,6 +407,67 @@ assert.equal(manualStopFetches, 1, "manual stop is never retried");
 assert.equal(manualStopSignal.aborted, true);
 assert.equal(manualStopPosted.find((message) => message.type === "ERROR").error, "请求已停止");
 
+// ---- Compatible endpoints: streaming is opt-in via compatibleStreaming.
+localData.settings = {
+  ...localData.settings,
+  baseUrl: "https://compatible.example.com/v1",
+  model: "generic-chat-model",
+  compatibleStreaming: false
+};
+let compatGateFetches = 0;
+globalThis.fetch = () => {
+  compatGateFetches += 1;
+  return sseResponse("data: [DONE]\n\n");
+};
+const compatOffPosted = connectStreamPort("compat-stream-off");
+await waitUntil(() => compatOffPosted.some((message) => message.type === "ERROR"));
+assert.equal(
+  compatOffPosted.find((message) => message.type === "ERROR").error,
+  "当前模型接口不支持 DeepSeek V4 实时思考协议"
+);
+assert.equal(compatGateFetches, 0, "opt-in off keeps compatible endpoints non-streaming");
+
+// Opt-in on: plain stream flag, no DeepSeek-only fields, DONE path works.
+localData.settings = { ...localData.settings, compatibleStreaming: true };
+let compatStreamBody = null;
+globalThis.fetch = (_url, options) => {
+  compatStreamBody = JSON.parse(options.body);
+  return sseResponse([
+    'data: {"choices":[{"delta":{"content":"compat hello"}}]}',
+    'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+    "data: [DONE]",
+    ""
+  ].join("\n\n"));
+};
+const compatOnPosted = connectStreamPort("compat-stream-on");
+await waitUntil(() => compatOnPosted.some((message) => message.type === "DONE"), 300);
+assert.equal(compatStreamBody.stream, true, "compatible endpoints stream when opted in");
+assert.equal("thinking" in compatStreamBody, false);
+assert.equal("reasoning_effort" in compatStreamBody, false);
+assert.equal("stream_options" in compatStreamBody, false);
+assert.ok(compatOnPosted.some((message) => message.type === "CONTENT_DELTA" && message.delta === "compat hello"));
+assert.ok(compatOnPosted.every((message) => message.type !== "REASONING_DELTA"), "compatible streams carry no reasoning");
+assert.equal(compatOnPosted.find((message) => message.type === "DONE").content, "compat hello");
+
+// Zero-content retry and idle semantics apply to compatible streams too.
+workerModule.__timings.streamRetryDelayMs = 5;
+let compatRetryFetches = 0;
+globalThis.fetch = () => {
+  compatRetryFetches += 1;
+  if (compatRetryFetches === 1) return Promise.reject(new TypeError("Failed to fetch"));
+  return sseResponse([
+    'data: {"choices":[{"delta":{"content":"recovered"}}]}',
+    'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+    "data: [DONE]",
+    ""
+  ].join("\n\n"));
+};
+const compatRetryPosted = connectStreamPort("compat-stream-retry");
+await waitUntil(() => compatRetryPosted.some((message) => message.type === "DONE"), 300);
+assert.equal(compatRetryFetches, 2, "compatible streams retry once while nothing was produced");
+assert.equal(compatRetryPosted.find((message) => message.type === "DONE").content, "recovered");
+workerModule.__timings.streamRetryDelayMs = 1000;
+
 // ---- Retrieval chain: concurrency gate and retry policy for Google pages.
 function pageResponse(body) {
   return {

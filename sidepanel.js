@@ -222,6 +222,7 @@ async function loadSettings() {
   elements.docsSearch.checked = currentSettings.docsSearch !== false;
   elements.thinkingEnabled.checked = currentSettings.thinkingEnabled !== false;
   elements.reasoningEffort.value = currentSettings.reasoningEffort === "max" ? "max" : "high";
+  elements.compatibleStreaming.checked = currentSettings.compatibleStreaming === true;
   elements.keyStatus.textContent = currentSettings.hasApiKey
     ? "已配置 API Key（不会在界面中回显）"
     : "尚未配置 API Key";
@@ -271,7 +272,8 @@ async function saveSettings(event) {
         apiKey: elements.apiKey.value,
         rememberApiKey: elements.rememberApiKey.checked,
         thinkingEnabled: elements.thinkingEnabled.checked,
-        reasoningEffort: elements.reasoningEffort.value
+        reasoningEffort: elements.reasoningEffort.value,
+        compatibleStreaming: elements.compatibleStreaming.checked
       }
     });
     if (!response?.ok) throw new Error(response?.error || "保存设置失败");
