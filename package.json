@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "lint": "eslint .",
-    "test": "node tests/run-tests.mjs && node tests/http-tests.mjs && node tests/response-tests.mjs && node tests/search-tests.mjs && node tests/api-tests.mjs && node tests/sse-tests.mjs && node tests/plan-tests.mjs && node tests/chat-tests.mjs && node tests/candidate-tests.mjs && node tests/queue-tests.mjs && node tests/conversation-tests.mjs && node tests/console-context-tests.mjs && node tests/console-reader-tests.mjs && node tests/service-worker-tests.mjs && node tests/ui-behavior-tests.mjs && node tests/ui-tests.mjs && node tests/bridge-tests.mjs"
+    "test": "node tests/run-tests.mjs && node tests/http-tests.mjs && node tests/response-tests.mjs && node tests/search-tests.mjs && node tests/api-tests.mjs && node tests/sse-tests.mjs && node tests/plan-tests.mjs && node tests/chat-tests.mjs && node tests/candidate-tests.mjs && node tests/storage-tests.mjs && node tests/queue-tests.mjs && node tests/conversation-tests.mjs && node tests/console-context-tests.mjs && node tests/console-reader-tests.mjs && node tests/service-worker-tests.mjs && node tests/ui-behavior-tests.mjs && node tests/ui-tests.mjs && node tests/bridge-tests.mjs"
   },
   "devDependencies": {
     "eslint": "^9.39.5"

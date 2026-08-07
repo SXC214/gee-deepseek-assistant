@@ -113,6 +113,11 @@ assert.ok(sendPromptBody.indexOf("setBusy(true)") < sendPromptBody.indexOf("awai
 assert.ok(sendPromptBody.indexOf('elements.prompt.value = ""') < sendPromptBody.indexOf("await runPlanTurn"), "sent text must leave the input before awaiting a response");
 assert.equal(manifest.version, "0.4.0");
 assert.ok(manifest.permissions.includes("clipboardWrite"));
+assert.ok(manifest.permissions.includes("unlimitedStorage"));
+assert.match(script, /import \{ setWithQuotaEviction \} from "\.\/lib\/storage\.js"/);
+assert.match(script, /function reportPersistFailure\(kind, error\)/);
+assert.match(script, /本地保存失败，仅保留在当前会话/);
+assert.match(script, /PERSIST_FAILURE_NOTIFY_COOLDOWN_MS = 10000/);
 assert.equal(packageJson.version, manifest.version);
 
 console.log("UI consistency tests passed.");

@@ -19,6 +19,7 @@ import {
   setPlanState
 } from "./lib/plan.js";
 import { extractCodeCandidate, stripCodeFences } from "./lib/response.js";
+import { setWithQuotaEviction } from "./lib/storage.js";
 import {
   createQueuedMessage,
   enqueueMessage,
@@ -315,7 +316,20 @@ function persistChatHistory() {
   const snapshot = sanitizeChatHistory(chatHistory);
   chatHistoryWrite = chatHistoryWrite
     .catch(() => undefined)
-    .then(() => chrome.storage.local.set({ [CHAT_HISTORY_KEY]: snapshot }));
+    .then(() => setWithQuotaEviction(chrome.storage.local, {
+      targetKey: CHAT_HISTORY_KEY,
+      targetValue: snapshot,
+      chatKey: CHAT_HISTORY_KEY,
+      candidateKey: CODE_CANDIDATE_KEY
+    }))
+    .then((outcome) => {
+      if (!outcome.persisted) throw new Error("本地存储空间不足，对话记录未能保存");
+      if (outcome.evictions.length) {
+        console.warn("为腾出本地存储空间已裁剪数据：", outcome.evictions.join(", "));
+        chatHistory = sanitizeChatHistory(outcome.finalValue);
+        setStatus("本地存储空间紧张，已自动裁剪较早的聊天记录", "error");
+      }
+    });
   return chatHistoryWrite;
 }
 
@@ -338,9 +352,9 @@ async function startNewConversation() {
   );
   renderToolSources([], []);
   await Promise.all([
-    chatHistoryWrite.catch(() => undefined),
-    candidateWrite.catch(() => undefined),
-    queueWrite.catch(() => undefined)
+    chatHistoryWrite.catch((error) => console.error("等待对话写入完成时出错：", error)),
+    candidateWrite.catch((error) => console.error("等待代码候选写入完成时出错：", error)),
+    queueWrite.catch((error) => console.error("等待消息队列写入完成时出错：", error))
   ]);
   await Promise.all([
     chrome.storage.local.remove(CHAT_HISTORY_KEY),
@@ -384,7 +398,7 @@ function enqueuePrompt(prompt, planMode) {
     planMode,
     createdAt: Date.now()
   }));
-  persistMessageQueue().catch(() => setStatus("消息已排队，但队列保存失败", "error"));
+  persistMessageQueue().catch((error) => reportPersistFailure("queue", error));
   renderMessageQueue();
   setStatus(`已加入后续消息队列 · ${queuedMessages.length} 条`);
 }
@@ -458,14 +472,14 @@ function clearMessageQueue() {
   queuedMessages = [];
   queuePaused = false;
   renderMessageQueue();
-  persistMessageQueue().catch(() => setStatus("队列清空保存失败", "error"));
+  persistMessageQueue().catch((error) => reportPersistFailure("queue", error));
   setStatus("后续消息队列已清空");
 }
 
 function resumeMessageQueue() {
   queuePaused = false;
   renderMessageQueue();
-  persistMessageQueue().catch(() => undefined);
+  persistMessageQueue().catch((error) => reportPersistFailure("queue", error));
   setStatus("后续消息队列已继续");
   queueMicrotask(() => drainMessageQueue());
 }
@@ -485,8 +499,35 @@ function persistCandidate() {
   if (!snapshot) return Promise.reject(new Error("代码候选状态无效，无法保存"));
   candidateWrite = candidateWrite
     .catch(() => undefined)
-    .then(() => chrome.storage.local.set({ [CODE_CANDIDATE_KEY]: snapshot }));
+    .then(() => setWithQuotaEviction(chrome.storage.local, {
+      targetKey: CODE_CANDIDATE_KEY,
+      targetValue: snapshot,
+      chatKey: CHAT_HISTORY_KEY,
+      candidateKey: CODE_CANDIDATE_KEY
+    }))
+    .then((outcome) => {
+      if (!outcome.persisted) throw new Error("本地存储空间不足，代码候选未能保存");
+      if (outcome.evictions.length) {
+        console.warn("为腾出本地存储空间已裁剪数据：", outcome.evictions.join(", "));
+        setStatus("本地存储空间紧张，已自动裁剪较早的数据以保存代码卡", "error");
+      }
+    });
   return candidateWrite;
+}
+
+// Throttled, visible degradation for failed local persistence: log the cause,
+// but show at most one status notice per kind within the cooldown window so
+// repeated quota failures never flood the status bar.
+const persistFailureNotifiedAt = new Map();
+const PERSIST_FAILURE_NOTIFY_COOLDOWN_MS = 10000;
+
+function reportPersistFailure(kind, error) {
+  console.error(`本地保存失败（${kind}），仅保留在当前会话：`, error);
+  const now = Date.now();
+  const last = persistFailureNotifiedAt.get(kind);
+  if (typeof last === "number" && now - last < PERSIST_FAILURE_NOTIFY_COOLDOWN_MS) return;
+  persistFailureNotifiedAt.set(kind, now);
+  setStatus("本地保存失败，仅保留在当前会话", "error");
 }
 
 async function restoreActivePlan() {
@@ -1703,7 +1744,7 @@ function showCandidate(code, baseState = editorState, planRevision = null) {
     createdAt: Date.now()
   });
   renderCandidateCard({ scroll: true });
-  persistCandidate().catch(() => setStatus("代码已显示，但最近结果保存失败"));
+  persistCandidate().catch((error) => reportPersistFailure("candidate", error));
 }
 
 function renderCandidateCard({ scroll = false } = {}) {
@@ -1826,7 +1867,7 @@ async function applyCandidate(mode) {
     const completedPlan = candidate.planRevision != null;
     candidate = markCodeCandidateApplied(candidate, mode);
     renderCandidateCard({ scroll: false });
-    persistCandidate().catch(() => setStatus("代码已应用，但应用状态保存失败"));
+    persistCandidate().catch((error) => reportPersistFailure("candidate", error));
     await readEditor({ quiet: true });
     if (completedPlan) {
       await clearActivePlan();
@@ -1934,7 +1975,7 @@ function appendMessage(role, text, { purpose = "direct" } = {}) {
   }
   const message = renderChatEntry(entry);
   elements.conversation.appendChild(message);
-  persistChatHistory().catch(() => setStatus("对话已显示，但本地记录保存失败"));
+  persistChatHistory().catch((error) => reportPersistFailure("chat", error));
   syncConversationEmptyState();
   if (follow) scrollConversationToEnd();
   else updateScrollFollower();

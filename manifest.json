@@ -6,6 +6,7 @@
   "permissions": [
     "sidePanel",
     "storage",
+    "unlimitedStorage",
     "tabs",
     "clipboardWrite"
   ],
