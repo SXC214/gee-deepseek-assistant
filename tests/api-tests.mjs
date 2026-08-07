@@ -14,6 +14,26 @@ assert.equal(isOfficialDeepSeekV4("https://api.deepseek.com", "deepseek-chat"), 
 assert.equal(isOfficialDeepSeekV4Flash("https://api.deepseek.com/v1", "deepseek-v4-flash"), true);
 assert.equal(isOfficialDeepSeekV4Flash("https://api.deepseek.com", "deepseek-v4-pro"), false);
 assert.equal(isOfficialDeepSeekV4Flash("https://proxy.example.com", "deepseek-v4-flash"), false);
+
+// Suffixed model names keep streaming instead of silently downgrading.
+assert.equal(isOfficialDeepSeekV4("https://api.deepseek.com", "deepseek-v4-flash-latest"), true);
+assert.equal(isOfficialDeepSeekV4("https://api.deepseek.com", "deepseek-v4-pro-2026-01"), true);
+assert.equal(isOfficialDeepSeekV4Flash("https://api.deepseek.com", "deepseek-v4-flash-latest"), true);
+assert.equal(isOfficialDeepSeekV4Flash("https://api.deepseek.com", "deepseek-v4-pro-latest"), false);
+
+// Unrelated model names must not match by prefix.
+assert.equal(isOfficialDeepSeekV4("https://api.deepseek.com", "deepseek-v3"), false);
+assert.equal(isOfficialDeepSeekV4("https://api.deepseek.com", "deepseek-v4"), false);
+assert.equal(isOfficialDeepSeekV4("https://api.deepseek.com", "gpt-4o"), false);
+assert.equal(isOfficialDeepSeekV4Flash("https://api.deepseek.com", "deepseek-v3-flash"), false);
+
+const suffixed = buildChatRequestBody({
+  model: "deepseek-v4-flash-latest", messages,
+  settings: { baseUrl: "https://api.deepseek.com", thinkingEnabled: true }
+});
+assert.equal(suffixed.stream, true);
+assert.deepEqual(suffixed.thinking, { type: "enabled" });
+
 assert.equal(isValidReasoningEffort("max"), true);
 assert.equal(isValidReasoningEffort("low"), false);
 
