@@ -8,7 +8,7 @@ import {
 } from "./lib/search.js";
 import { buildChatRequestBody, isOfficialDeepSeekV4, isValidReasoningEffort } from "./lib/api.js";
 import { consumeSseResponse } from "./lib/sse.js";
-import { RETRYABLE_STATUSES, fetchWithPolicy, waitInterruptible } from "./lib/http.js";
+import { RETRYABLE_STATUSES, createSemaphore, fetchWithPolicy, waitInterruptible } from "./lib/http.js";
 
 const DEFAULT_SETTINGS = Object.freeze({
   baseUrl: "https://api.deepseek.com",
@@ -39,6 +39,8 @@ export const __timings = {
 // Billed POST requests are retried at most once, and only while nothing has
 // been streamed to the user yet (see streamChat).
 const STREAM_RETRY_LIMIT = 1;
+// Bounds simultaneous Google page fetches so catalog bursts stay polite.
+const pageSemaphore = createSemaphore(__timings.pageConcurrency);
 const DATASET_INDEX_URL = "https://developers.google.com/earth-engine/datasets/catalog";
 const DOC_INDEX_URLS = [
   "https://developers.google.com/earth-engine/guides",
@@ -570,10 +572,10 @@ async function getCachedIndex(key, loader) {
 }
 
 async function fetchDetails(entries, query, kind, signal) {
-  const settled = await Promise.allSettled(entries.map(async (entry) => {
+  const settled = await Promise.allSettled(entries.map((entry) => pageSemaphore.run(async () => {
     const html = await fetchText(entry.url, signal);
     return extractOfficialPage(html, entry.url, query, kind);
-  }));
+  })));
   const aborted = settled.find((item) => item.status === "rejected" && item.reason?.name === "AbortError");
   if (aborted) throw aborted.reason;
   return settled.filter((item) => item.status === "fulfilled").map((item) => item.value);
@@ -585,25 +587,21 @@ async function fetchText(url, externalSignal) {
   const target = new URL(canonical);
   if (target.hostname === "developers.google.com") target.searchParams.set("hl", "en");
 
-  const controller = new AbortController();
-  const abortFromExternal = () => controller.abort();
-  if (externalSignal?.aborted) controller.abort();
-  else externalSignal?.addEventListener("abort", abortFromExternal, { once: true });
-  const timeout = setTimeout(() => controller.abort(), 15000);
-  try {
-    const response = await fetch(target.href, {
-      headers: { "Accept": "text/html,application/xhtml+xml" },
-      signal: controller.signal
-    });
-    if (!response.ok) throw new Error(`官方页面请求失败（HTTP ${response.status}）`);
-    const text = await response.text();
-    pageCache.set(canonical, text);
-    if (pageCache.size > 40) pageCache.delete(pageCache.keys().next().value);
-    return text;
-  } finally {
-    clearTimeout(timeout);
-    externalSignal?.removeEventListener("abort", abortFromExternal);
-  }
+  // Idempotent GET: retry with a generous backoff so bursts do not trip
+  // Google's stricter rate limits. External aborts are never retried.
+  const response = await fetchWithPolicy(target.href, {
+    headers: { "Accept": "text/html,application/xhtml+xml" },
+    signal: externalSignal,
+    timeoutMs: __timings.pageTimeoutMs,
+    retryable: true,
+    maxRetries: __timings.pageMaxRetries,
+    backoffMs: __timings.pageBackoffMs
+  });
+  if (!response.ok) throw new Error(`官方页面请求失败（HTTP ${response.status}）`);
+  const text = await response.text();
+  pageCache.set(canonical, text);
+  if (pageCache.size > 40) pageCache.delete(pageCache.keys().next().value);
+  return text;
 }
 
 function formatOfficialContext(sources) {

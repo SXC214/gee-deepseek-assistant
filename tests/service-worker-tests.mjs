@@ -407,4 +407,69 @@ assert.equal(manualStopFetches, 1, "manual stop is never retried");
 assert.equal(manualStopSignal.aborted, true);
 assert.equal(manualStopPosted.find((message) => message.type === "ERROR").error, "请求已停止");
 
+// ---- Retrieval chain: concurrency gate and retry policy for Google pages.
+function pageResponse(body) {
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    text: async () => body
+  };
+}
+
+function datasetEntries(prefix, count) {
+  return Array.from({ length: count }, (_unused, index) => ({
+    title: `MODIS Terra True Color ${prefix} ${index}`,
+    url: `https://developers.google.com/earth-engine/datasets/catalog/${prefix}_${index}`,
+    description: "modis terra true color updated daily"
+  }));
+}
+
+workerModule.__timings.pageBackoffMs = 5;
+
+// Concurrency gate: at most 4 detail pages are fetched at once.
+let gateInFlight = 0;
+let gatePeak = 0;
+let gateFetches = 0;
+localData.datasetIndexV2 = { createdAt: Date.now(), entries: datasetEntries("MODIS_GATE", 8) };
+globalThis.fetch = async () => {
+  gateFetches += 1;
+  gateInFlight += 1;
+  gatePeak = Math.max(gatePeak, gateInFlight);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  gateInFlight -= 1;
+  return pageResponse("<html><head><title>MODIS</title></head><body>modis terra true color</body></html>");
+};
+const gateResult = await dispatch({
+  type: "TOOLS_SEARCH",
+  payload: { requestId: "gate-search", query: "modis", datasetSearch: true, docsSearch: false }
+});
+assert.equal(gateResult.ok, true);
+assert.equal(gatePeak, 4, "detail fetches are gated at 4 concurrent requests");
+assert.ok(gateFetches >= 6, "all candidate pages were fetched");
+assert.ok(gateResult.sources.length >= 1, "pages still aggregate into sources");
+
+// Retry: a flaky 503 page is retried after the backoff and succeeds.
+const retryAttempts = new Map();
+localData.datasetIndexV2 = { createdAt: Date.now(), entries: datasetEntries("MODIS_RETRY", 6) };
+globalThis.fetch = async (url) => {
+  const key = String(url);
+  retryAttempts.set(key, (retryAttempts.get(key) || 0) + 1);
+  if (key.includes("MODIS_RETRY_0") && retryAttempts.get(key) === 1) {
+    return { ok: false, status: 503, headers: { get: () => null }, text: async () => "" };
+  }
+  return pageResponse("<html><head><title>MODIS</title></head><body>modis terra</body></html>");
+};
+const retrySearch = await dispatch({
+  type: "TOOLS_SEARCH",
+  payload: { requestId: "retry-search", query: "modis", datasetSearch: true, docsSearch: false }
+});
+assert.equal(retrySearch.ok, true);
+const flakyUrl = [...retryAttempts.keys()].find((key) => key.includes("MODIS_RETRY_0"));
+assert.ok(flakyUrl, "flaky page was requested");
+assert.equal(retryAttempts.get(flakyUrl), 2, "retryable GET is retried after 503");
+const stableUrl = [...retryAttempts.keys()].find((key) => key.includes("MODIS_RETRY_1"));
+assert.equal(retryAttempts.get(stableUrl), 1, "healthy pages are fetched once");
+workerModule.__timings.pageBackoffMs = 2000;
+
 console.log("Service worker tests passed.");
