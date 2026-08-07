@@ -4,7 +4,18 @@
   const CHANNEL = "gee-ai-assistant";
   const REQUEST = "GEE_AI_BRIDGE_REQUEST";
   const RESPONSE = "GEE_AI_BRIDGE_RESPONSE";
-  const CONSOLE_SOURCES = ["legacy_selector", "aria_tabpanel", "semantic_fallback"];
+
+  // Page-structure selectors are centralised here so DOM drift only requires
+  // editing this block. Order of use is defined by CONSOLE_STRATEGIES below.
+  const EE_CONSOLE_SELECTOR = "ee-console";
+  const CONSOLE_ENTRIES_SELECTOR = ".console-entries";
+  const GEE_CONSOLE_TAB_EXACT_SELECTOR = "body > ee-app-context > div > div:nth-of-type(2) > div:nth-of-type(1) > div > div:nth-of-type(2) > div > ee-tab-panel > ee-tab:nth-of-type(2)";
+  const GEE_CONSOLE_TAB_LOOSE_SELECTOR = "ee-app-context ee-tab-panel > ee-tab:nth-of-type(2)";
+  const ARIA_CONTROLS_SELECTOR = "[aria-controls]";
+  const ARIA_TABPANEL_SELECTOR = '[role="tabpanel"]';
+  const SEMANTIC_CONSOLE_ATTRIBUTE_SELECTOR = '[class*="console" i],[id*="console" i]';
+  const SEMANTIC_LABEL_SELECTOR = 'button,[role="tab"],div,span';
+  const SEMANTIC_ERROR_SELECTOR = '[role="alert"],[class*="error" i]';
   const pending = new Map();
 
   window.addEventListener("message", (event) => {
@@ -83,13 +94,26 @@
     });
   }
 
+  // Ordered multi-strategy fallback:
+  // 1. `.console-entries` — the README-declared adaptation target.
+  // 2. The historical hardcoded GEE tab paths (kept as a secondary probe).
+  // 3. aria probing, then general semantic heuristics.
+  // The hardcoded probe reports "semantic_fallback" to keep the source label
+  // set consumed by lib/console.js unchanged.
+  const CONSOLE_STRATEGIES = [
+    { source: "legacy_selector", find: () => uniqueElements(safeQueryAll(CONSOLE_ENTRIES_SELECTOR)) },
+    { source: "semantic_fallback", find: findGeeConsoleTabCandidates },
+    { source: "aria_tabpanel", find: findAriaConsolePanels },
+    { source: "semantic_fallback", find: findSemanticConsoleCandidates }
+  ];
+
   function readConsole() {
     try {
       let foundContainer = false;
       let firstSource = null;
       let readFailed = false;
 
-      const directEeConsoles = findElementsInOpenShadowRoots("ee-console");
+      const directEeConsoles = findElementsInOpenShadowRoots(EE_CONSOLE_SELECTOR);
       if (directEeConsoles.length) {
         foundContainer = true;
         firstSource = "semantic_fallback";
@@ -113,11 +137,11 @@
         }
       }
 
-      for (const source of CONSOLE_SOURCES) {
-        const candidates = findConsoleCandidates(source);
+      for (const strategy of CONSOLE_STRATEGIES) {
+        const candidates = strategy.find();
         if (!candidates.length) continue;
         foundContainer = true;
-        firstSource ||= source;
+        firstSource ||= strategy.source;
 
         const texts = [];
         for (const candidate of preferVisible(candidates)) {
@@ -134,7 +158,7 @@
           return {
             text: merged,
             status: "captured",
-            source,
+            source: strategy.source,
             reason: null
           };
         }
@@ -154,19 +178,9 @@
     }
   }
 
-  function findConsoleCandidates(source) {
-    if (source === "legacy_selector") {
-      return uniqueElements(safeQueryAll(".console-entries"));
-    }
-    if (source === "aria_tabpanel") {
-      return findAriaConsolePanels();
-    }
-    return findSemanticConsoleCandidates();
-  }
-
   function findAriaConsolePanels() {
     const candidates = [];
-    for (const control of safeQueryAll("[aria-controls]")) {
+    for (const control of safeQueryAll(ARIA_CONTROLS_SELECTOR)) {
       if (!isConsoleLabel(control)) continue;
       const ids = String(control.getAttribute?.("aria-controls") || "").split(/\s+/).filter(Boolean);
       for (const id of ids) {
@@ -175,7 +189,7 @@
       }
     }
 
-    for (const panel of safeQueryAll('[role="tabpanel"]')) {
+    for (const panel of safeQueryAll(ARIA_TABPANEL_SELECTOR)) {
       const ownLabel = `${panel.getAttribute?.("aria-label") || ""} ${panel.getAttribute?.("data-title") || ""}`;
       const labelledBy = panel.getAttribute?.("aria-labelledby");
       const label = labelledBy ? document.getElementById?.(labelledBy) : null;
@@ -185,14 +199,10 @@
   }
 
   function findSemanticConsoleCandidates() {
-    const candidates = findElementsInOpenShadowRoots("ee-console");
-    candidates.push(...safeQueryAll([
-      '[class*="console" i]',
-      '[id*="console" i]'
-    ].join(",")));
-    candidates.push(...findGeeConsoleTabCandidates());
+    const candidates = findElementsInOpenShadowRoots(EE_CONSOLE_SELECTOR);
+    candidates.push(...safeQueryAll(SEMANTIC_CONSOLE_ATTRIBUTE_SELECTOR));
 
-    for (const label of safeQueryAll('button,[role="tab"],div,span')) {
+    for (const label of safeQueryAll(SEMANTIC_LABEL_SELECTOR)) {
       if (!isConsoleLabel(label)) continue;
       const parent = label.parentElement;
       if (!parent) continue;
@@ -201,7 +211,7 @@
       }
     }
 
-    for (const errorNode of safeQueryAll('[role="alert"],[class*="error" i]')) {
+    for (const errorNode of safeQueryAll(SEMANTIC_ERROR_SELECTOR)) {
       if (hasConsoleSignal(rawElementText(errorNode))) candidates.push(errorNode);
     }
 
@@ -213,10 +223,9 @@
   }
 
   function findGeeConsoleTabCandidates() {
-    const exactPath = "body > ee-app-context > div > div:nth-of-type(2) > div:nth-of-type(1) > div > div:nth-of-type(2) > div > ee-tab-panel > ee-tab:nth-of-type(2)";
     const tabs = uniqueElements([
-      ...safeQueryAll(exactPath),
-      ...safeQueryAll("ee-app-context ee-tab-panel > ee-tab:nth-of-type(2)")
+      ...safeQueryAll(GEE_CONSOLE_TAB_EXACT_SELECTOR),
+      ...safeQueryAll(GEE_CONSOLE_TAB_LOOSE_SELECTOR)
     ]);
     const candidates = [];
     for (const tab of tabs) {

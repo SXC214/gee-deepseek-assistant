@@ -233,6 +233,71 @@ const screenshotError = "Layer error: Image.select: Band pattern 'elevation' did
   assert.match(response.consoleText, /Band pattern 'elevation'/);
 }
 
+// The loose hardcoded ee-tab path works on its own as the secondary probe.
+{
+  const errorDiv = new FakeElement({ text: screenshotError });
+  const shadowRoot = new FakeRoot({ text: screenshotError, selectors: { div: [errorDiv], "*": [errorDiv] } });
+  const consoleTab = new FakeElement({ tagName: "EE-TAB", shadowRoot });
+  const response = await createHarness({
+    selectors: { "ee-app-context ee-tab-panel > ee-tab:nth-of-type(2)": [consoleTab] }
+  })();
+  assert.equal(response.consoleRead.status, "captured");
+  assert.equal(response.consoleRead.source, "semantic_fallback");
+  assert.match(response.consoleText, /Band pattern 'elevation'/);
+}
+
+// Strategy priority: `.console-entries` wins over the hardcoded path.
+{
+  const exactPath = "body > ee-app-context > div > div:nth-of-type(2) > div:nth-of-type(1) > div > div:nth-of-type(2) > div > ee-tab-panel > ee-tab:nth-of-type(2)";
+  const legacyElement = new FakeElement({ text: "primary legacy capture" });
+  const hardcodedTab = new FakeElement({ tagName: "EE-TAB", text: "hardcoded content" });
+  const response = await createHarness({
+    selectors: {
+      ".console-entries": [legacyElement],
+      [exactPath]: [hardcodedTab]
+    }
+  })();
+  assert.equal(response.consoleRead.source, "legacy_selector");
+  assert.equal(response.consoleText, "primary legacy capture");
+}
+
+// Strategy priority: the hardcoded path beats aria probing.
+{
+  const exactPath = "body > ee-app-context > div > div:nth-of-type(2) > div:nth-of-type(1) > div > div:nth-of-type(2) > div > ee-tab-panel > ee-tab:nth-of-type(2)";
+  const errorDiv = new FakeElement({ text: screenshotError });
+  const shadowRoot = new FakeRoot({ text: screenshotError, selectors: { div: [errorDiv], "*": [errorDiv] } });
+  const consoleTab = new FakeElement({ tagName: "EE-TAB", shadowRoot });
+  const ariaTab = new FakeElement({ text: "Console", attributes: { "aria-controls": "console-panel" }, tagName: "BUTTON" });
+  const ariaPanel = new FakeElement({ text: "aria panel text" });
+  const response = await createHarness({
+    selectors: {
+      [exactPath]: [consoleTab],
+      "[aria-controls]": [ariaTab]
+    },
+    ids: { "console-panel": ariaPanel }
+  })();
+  assert.equal(response.consoleRead.source, "semantic_fallback");
+  assert.match(response.consoleText, /Band pattern 'elevation'/);
+}
+
+// The loose hardcoded path wins over aria probing as well.
+{
+  const errorDiv = new FakeElement({ text: screenshotError });
+  const shadowRoot = new FakeRoot({ text: screenshotError, selectors: { div: [errorDiv], "*": [errorDiv] } });
+  const consoleTab = new FakeElement({ tagName: "EE-TAB", shadowRoot });
+  const ariaTab = new FakeElement({ text: "Console", attributes: { "aria-controls": "console-panel" }, tagName: "BUTTON" });
+  const ariaPanel = new FakeElement({ text: "aria panel text" });
+  const response = await createHarness({
+    selectors: {
+      "ee-app-context ee-tab-panel > ee-tab:nth-of-type(2)": [consoleTab],
+      "[aria-controls]": [ariaTab]
+    },
+    ids: { "console-panel": ariaPanel }
+  })();
+  assert.equal(response.consoleRead.source, "semantic_fallback");
+  assert.match(response.consoleText, /Band pattern 'elevation'/);
+}
+
 {
   const empty = new FakeElement({ text: "Use print(...) to write to this console." });
   const response = await createHarness({ selectors: { ".console-entries": [empty] } })();
