@@ -1,5 +1,21 @@
 import assert from "node:assert/strict";
-import { candidateMetaOnly, halveChatHistory, setWithQuotaEviction } from "../lib/storage.js";
+import {
+  ACTIVE_PLAN_KEY,
+  CHAT_HISTORY_KEY,
+  CODE_CANDIDATE_KEY,
+  MESSAGE_QUEUE_KEY,
+  candidateMetaOnly,
+  halveChatHistory,
+  readActivePlan,
+  readChatHistory,
+  readCodeCandidate,
+  readMessageQueue,
+  serializeActivePlan,
+  serializeCodeCandidate,
+  setWithQuotaEviction,
+  writeMessageQueueSnapshot
+} from "../lib/storage.js";
+import { createPlanSession, setPlanState } from "../lib/plan.js";
 
 // halveChatHistory keeps the newest half and tolerates tiny or invalid input.
 assert.deepEqual(halveChatHistory([1, 2, 3, 4]), [3, 4]);
@@ -153,6 +169,103 @@ function createFakeStorage(initial = {}) {
   assert.equal(outcome.finalValue, null);
   assert.ok(outcome.evictions.includes("chat-history-halved"));
   assert.ok(outcome.evictions.includes("candidate-meta-only"));
+}
+
+// Storage keys keep the exact names the sidepanel used before the merge.
+assert.equal(CHAT_HISTORY_KEY, "chatHistoryV1");
+assert.equal(CODE_CANDIDATE_KEY, "codeCandidateV1");
+assert.equal(MESSAGE_QUEUE_KEY, "messageQueueV1");
+assert.equal(ACTIVE_PLAN_KEY, "activePlanV1");
+
+// readChatHistory sanitizes stored entries and drops corrupted ones.
+{
+  const storage = createFakeStorage({
+    [CHAT_HISTORY_KEY]: [
+      { id: "a", role: "user", text: "你好", purpose: "direct", createdAt: 1000 },
+      { role: "assistant" },
+      { id: "b", role: "assistant", text: "回答", createdAt: 2000 }
+    ]
+  });
+  const history = await readChatHistory(storage);
+  assert.equal(history.length, 2, "corrupted entry is dropped independently");
+  assert.deepEqual(history.map((entry) => entry.id), ["a", "b"]);
+  assert.deepEqual(history.map((entry) => entry.role), ["user", "assistant"]);
+  assert.deepEqual(await readChatHistory(createFakeStorage()), []);
+}
+
+// readMessageQueue tolerates the snapshot wrapper and the legacy bare array.
+{
+  const item = { id: "q1", text: "队列消息", planMode: false, createdAt: 1000 };
+  const wrapped = createFakeStorage({
+    [MESSAGE_QUEUE_KEY]: { schemaVersion: 1, items: [item], paused: true }
+  });
+  const snapshot = await readMessageQueue(wrapped);
+  assert.equal(snapshot.items.length, 1);
+  assert.equal(snapshot.items[0].text, "队列消息");
+  assert.equal(snapshot.paused, true);
+
+  const legacy = await readMessageQueue(createFakeStorage({ [MESSAGE_QUEUE_KEY]: [item] }));
+  assert.equal(legacy.items.length, 1, "legacy bare-array shape still restores");
+  assert.equal(legacy.paused, false);
+
+  const emptyPaused = await readMessageQueue(
+    createFakeStorage({ [MESSAGE_QUEUE_KEY]: { items: [], paused: true } })
+  );
+  assert.deepEqual(emptyPaused, { items: [], paused: false }, "paused never survives an empty queue");
+
+  assert.deepEqual(await readMessageQueue(createFakeStorage()), { items: [], paused: false });
+}
+
+// writeMessageQueueSnapshot sets non-empty snapshots and removes empty ones.
+{
+  const storage = createFakeStorage();
+  const snapshot = await writeMessageQueueSnapshot(storage, {
+    items: [{ id: "q1", text: "队列消息", planMode: true, createdAt: 5 }],
+    paused: true
+  });
+  assert.equal(snapshot.schemaVersion, 1);
+  assert.equal(snapshot.items.length, 1);
+  assert.equal(snapshot.items[0].planMode, true);
+  assert.equal(storage.data[MESSAGE_QUEUE_KEY].paused, true);
+
+  await writeMessageQueueSnapshot(storage, { items: [], paused: true });
+  assert.equal(MESSAGE_QUEUE_KEY in storage.data, false, "empty queue is written as removal");
+}
+
+// readCodeCandidate / serializeCodeCandidate round-trip a valid candidate.
+{
+  const storage = createFakeStorage({
+    [CODE_CANDIDATE_KEY]: { code: "var a = 1;", baseCode: "" }
+  });
+  const restored = await readCodeCandidate(storage);
+  assert.equal(restored.code, "var a = 1;");
+  assert.equal(restored.status, "ready");
+  assert.equal(await readCodeCandidate(createFakeStorage()), null);
+
+  assert.equal(serializeCodeCandidate({ code: "" }), null, "empty code cannot be stored");
+  assert.equal(serializeCodeCandidate({ code: "var b = 2;" }).code, "var b = 2;");
+}
+
+// readActivePlan / serializeActivePlan keep the transient runtime state.
+{
+  const plan = setPlanState(createPlanSession("分析 NDVI 时序"), "researching");
+  assert.equal(plan.state, "researching");
+  assert.equal(plan.stableState, "idle");
+
+  const storage = createFakeStorage();
+  const serialized = await serializeActivePlan(storage, plan);
+  assert.equal(serialized.state, "researching", "live transient state is preserved");
+  assert.equal(serialized.stableState, "idle");
+  await storage.set({ [ACTIVE_PLAN_KEY]: serialized });
+
+  const restored = await readActivePlan(storage);
+  assert.equal(restored.originalRequest, "分析 NDVI 时序");
+  assert.equal(restored.state, "idle", "restore falls back to the stable state");
+
+  assert.equal(await serializeActivePlan(storage, null), null);
+  assert.equal(ACTIVE_PLAN_KEY in storage.data, false, "absent plan is written as removal");
+
+  assert.equal(await serializeActivePlan(createFakeStorage(), { originalRequest: "" }), null);
 }
 
 console.log("Storage eviction tests passed.");

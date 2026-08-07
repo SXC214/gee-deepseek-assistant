@@ -1,20 +1,30 @@
 import { isOfficialDeepSeekV4 } from "./lib/api.js";
 import {
   createCodeCandidate,
-  markCodeCandidateApplied,
-  sanitizeCodeCandidate
+  markCodeCandidateApplied
 } from "./lib/candidate.js";
 import { appendChatEntry, createChatEntry, sanitizeChatHistory, sanitizeChatText } from "./lib/chat.js";
 import { createConsoleContextSection, getConsoleUiState, normalizeConsoleRead } from "./lib/console.js";
 import { alignConversationToUser } from "./lib/conversation.js";
 import { createLineDiff } from "./lib/diff.js";
 import { createOrchestrator } from "./lib/orchestrator.js";
-import { restorePlanSession, sanitizePlanSession } from "./lib/plan.js";
-import { setWithQuotaEviction } from "./lib/storage.js";
+import {
+  ACTIVE_PLAN_KEY,
+  CHAT_HISTORY_KEY,
+  CODE_CANDIDATE_KEY,
+  MESSAGE_QUEUE_KEY,
+  readActivePlan,
+  readChatHistory,
+  readCodeCandidate,
+  readMessageQueue,
+  serializeActivePlan,
+  serializeCodeCandidate,
+  setWithQuotaEviction,
+  writeMessageQueueSnapshot
+} from "./lib/storage.js";
 import {
   prioritizeQueuedMessage,
-  removeQueuedMessage,
-  sanitizeMessageQueue
+  removeQueuedMessage
 } from "./lib/queue.js";
 import {
   countPlanAnswerBlocks,
@@ -30,10 +40,6 @@ import {
   upsertPlanAnswerText
 } from "./lib/ui.js";
 
-const ACTIVE_PLAN_KEY = "activePlanV1";
-const CHAT_HISTORY_KEY = "chatHistoryV1";
-const CODE_CANDIDATE_KEY = "codeCandidateV1";
-const MESSAGE_QUEUE_KEY = "messageQueueV1";
 const elements = Object.fromEntries(
   [...document.querySelectorAll("[id]")].map((element) => [element.id, element])
 );
@@ -541,8 +547,7 @@ function renderGeeTasks() {
 }
 
 async function restoreChatHistory() {
-  const stored = await chrome.storage.local.get(CHAT_HISTORY_KEY);
-  chatHistory = sanitizeChatHistory(stored[CHAT_HISTORY_KEY]);
+  chatHistory = await readChatHistory(chrome.storage.local);
   orchestrator.setDirectConversation(alignConversationToUser(
     chatHistory
       .filter((entry) => entry.purpose === "direct" && ["user", "assistant"].includes(entry.role))
@@ -614,20 +619,19 @@ async function startNewConversation() {
 }
 
 async function restoreMessageQueue() {
-  const stored = await chrome.storage.local.get(MESSAGE_QUEUE_KEY);
-  const snapshot = stored[MESSAGE_QUEUE_KEY];
-  orchestrator.setQueue(sanitizeMessageQueue(snapshot?.items ?? snapshot));
-  orchestrator.setQueuePaused(Boolean(snapshot?.paused && orchestrator.getQueue().length));
+  const restored = await readMessageQueue(chrome.storage.local);
+  orchestrator.setQueue(restored.items);
+  orchestrator.setQueuePaused(restored.paused);
   renderMessageQueue();
 }
 
 function persistMessageQueue() {
-  const snapshot = { schemaVersion: 1, items: sanitizeMessageQueue(orchestrator.getQueue()), paused: orchestrator.isQueuePaused() };
   queueWrite = queueWrite
     .catch(() => undefined)
-    .then(() => snapshot.items.length
-      ? chrome.storage.local.set({ [MESSAGE_QUEUE_KEY]: snapshot })
-      : chrome.storage.local.remove(MESSAGE_QUEUE_KEY));
+    .then(() => writeMessageQueueSnapshot(chrome.storage.local, {
+      items: orchestrator.getQueue(),
+      paused: orchestrator.isQueuePaused()
+    }));
   return queueWrite;
 }
 
@@ -723,8 +727,7 @@ function resumeMessageQueue() {
 }
 
 async function restoreCandidate() {
-  const stored = await chrome.storage.local.get(CODE_CANDIDATE_KEY);
-  candidate = sanitizeCodeCandidate(stored[CODE_CANDIDATE_KEY]);
+  candidate = await readCodeCandidate(chrome.storage.local);
   if (!candidate) {
     await chrome.storage.local.remove(CODE_CANDIDATE_KEY);
     return;
@@ -733,7 +736,7 @@ async function restoreCandidate() {
 }
 
 function persistCandidate() {
-  const snapshot = sanitizeCodeCandidate(candidate);
+  const snapshot = serializeCodeCandidate(candidate);
   if (!snapshot) return Promise.reject(new Error("代码候选状态无效，无法保存"));
   candidateWrite = candidateWrite
     .catch(() => undefined)
@@ -769,8 +772,7 @@ function reportPersistFailure(kind, error) {
 }
 
 async function restoreActivePlan() {
-  const stored = await chrome.storage.local.get(ACTIVE_PLAN_KEY);
-  const restored = restorePlanSession(stored[ACTIVE_PLAN_KEY]);
+  const restored = await readActivePlan(chrome.storage.local);
   if (restored) {
     elements.planMode.checked = true;
     orchestrator.updateActivePlan(restored);
@@ -781,15 +783,9 @@ async function restoreActivePlan() {
 }
 
 async function persistActivePlan(plan = orchestrator.getActivePlan()) {
-  if (!plan) {
-    await chrome.storage.local.remove(ACTIVE_PLAN_KEY);
-    return null;
-  }
-  const transientState = plan.state;
-  const sanitized = sanitizePlanSession({ ...plan, state: plan.stableState });
-  if (!sanitized) throw new Error("分析计划状态无效，无法保存");
-  const storedPlan = { ...sanitized, state: transientState };
-  await chrome.storage.local.set({ [ACTIVE_PLAN_KEY]: storedPlan });
+  const storedPlan = await serializeActivePlan(chrome.storage.local, plan);
+  if (plan && !storedPlan) throw new Error("分析计划状态无效，无法保存");
+  if (storedPlan) await chrome.storage.local.set({ [ACTIVE_PLAN_KEY]: storedPlan });
   return storedPlan;
 }
 
