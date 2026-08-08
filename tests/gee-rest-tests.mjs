@@ -118,13 +118,14 @@ function mockResponse(status, body = "") {
   assert.deepEqual(result.items[1], { id: "projects/p/assets/legacy/table1", name: "table1", type: "TABLE" });
 }
 
-// ---- listTasks: pageSize=50 and tolerant normalization.
+// ---- listTasks: pageSize=50, optional pageToken and tolerant normalization.
 {
   const calls = [];
   globalThis.fetch = async (url) => {
     calls.push(url);
     return mockResponse(200, {
-      operations: [{ name: "operations/x", metadata: { state: "RUNNING", description: "ingest" } }, { done: true }]
+      operations: [{ name: "operations/x", metadata: { state: "RUNNING", description: "ingest" } }, { done: true }],
+      nextPageToken: "tasks-next-1"
     });
   };
   const result = await listTasks("tok-2", "proj");
@@ -132,6 +133,10 @@ function mockResponse(status, body = "") {
   assert.equal(result.items.length, 2);
   assert.equal(result.items[0].state, "RUNNING");
   assert.equal(result.items[1].state, "DONE");
+  assert.equal(result.nextPageToken, "tasks-next-1");
+  await listTasks("tok-2", "proj", "tasks-next-1");
+  assert.match(calls[1], /pageSize=50/);
+  assert.match(calls[1], /pageToken=tasks-next-1/);
 }
 
 // ---- 401 surfaces as code UNAUTHORIZED; 503 is retried (maxRetries 2).

@@ -187,6 +187,7 @@ function bindEvents() {
   elements.geeRestCloseButton.addEventListener("click", () => toggleGeeRestPanel(false));
   elements.geeRestRefreshButton.addEventListener("click", () => refreshGeeRest().catch(showError));
   elements.geeAssetMoreButton.addEventListener("click", () => loadGeeAssets(geeAssetNextToken).catch(showError));
+  elements.geeTaskMoreButton.addEventListener("click", () => loadGeeTasks(geeTaskNextToken).catch(showError));
   elements.copyRedirectUriButton.addEventListener("click", copyGeeRedirectUri);
   elements.promptForm.addEventListener("submit", sendPrompt);
   elements.stopButton.addEventListener("click", stopRequest);
@@ -338,6 +339,7 @@ async function clearKey() {
 let geeAssetItems = [];
 let geeTaskItems = [];
 let geeAssetNextToken = "";
+let geeTaskNextToken = "";
 let geeAssetLoading = false;
 let geeTaskLoading = false;
 
@@ -408,6 +410,7 @@ async function refreshGeeRest() {
   geeAssetItems = [];
   geeAssetNextToken = "";
   geeTaskItems = [];
+  geeTaskNextToken = "";
   setGeeColumnError("assets", "");
   setGeeColumnError("tasks", "");
   renderGeeAssets();
@@ -452,7 +455,7 @@ async function loadGeeAssets(pageToken = "") {
   }
 }
 
-async function loadGeeTasks() {
+async function loadGeeTasks(pageToken = "") {
   if (geeTaskLoading) return;
   if (!geeRestConfigured()) {
     renderGeeTasks();
@@ -460,14 +463,15 @@ async function loadGeeTasks() {
   }
   geeTaskLoading = true;
   syncGeeRestRefreshButton();
-  setGeeRestStatus(geeAssetLoading ? "正在加载资产 / 任务…" : "正在加载任务…");
+  setGeeRestStatus(geeAssetLoading ? "正在加载资产 / 任务…" : (pageToken ? "正在加载更多任务…" : "正在加载任务…"));
   try {
     const response = await chrome.runtime.sendMessage({
       type: "GEE_REST_LIST_TASKS",
-      payload: { requestId: crypto.randomUUID() }
+      payload: { requestId: crypto.randomUUID(), pageToken }
     });
     if (!response?.ok) throw new Error(response?.error || "加载任务失败");
-    geeTaskItems = response.items;
+    geeTaskItems = pageToken ? [...geeTaskItems, ...response.items] : response.items;
+    geeTaskNextToken = response.nextPageToken || "";
     setGeeColumnError("tasks", "");
     renderGeeTasks();
     setGeeRestStatus("");
@@ -547,29 +551,30 @@ function renderGeeTasks() {
       empty.textContent = "暂无任务";
       list.appendChild(empty);
     }
-    return;
-  }
-  for (const item of geeTaskItems) {
-    const row = document.createElement("div");
-    row.className = "gee-rest-item";
-    const main = document.createElement("div");
-    main.className = "gee-rest-item-main";
-    const name = document.createElement("span");
-    name.className = "gee-rest-item-name";
-    name.textContent = item.name || "（未命名任务）";
-    const state = document.createElement("span");
-    state.className = "gee-rest-item-type";
-    state.textContent = item.state;
-    main.append(name, state);
-    row.appendChild(main);
-    if (item.summary) {
-      const summary = document.createElement("p");
-      summary.className = "hint";
-      summary.textContent = item.summary;
-      row.appendChild(summary);
+  } else {
+    for (const item of geeTaskItems) {
+      const row = document.createElement("div");
+      row.className = "gee-rest-item";
+      const main = document.createElement("div");
+      main.className = "gee-rest-item-main";
+      const name = document.createElement("span");
+      name.className = "gee-rest-item-name";
+      name.textContent = item.name || "（未命名任务）";
+      const state = document.createElement("span");
+      state.className = "gee-rest-item-type";
+      state.textContent = item.state;
+      main.append(name, state);
+      row.appendChild(main);
+      if (item.summary) {
+        const summary = document.createElement("p");
+        summary.className = "hint";
+        summary.textContent = item.summary;
+        row.appendChild(summary);
+      }
+      list.appendChild(row);
     }
-    list.appendChild(row);
   }
+  elements.geeTaskMoreButton.classList.toggle("hidden", !geeTaskNextToken);
 }
 
 async function restoreChatHistory() {

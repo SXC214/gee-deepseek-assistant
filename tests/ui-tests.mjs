@@ -168,6 +168,8 @@ assert.match(html, /id="geeAssetMoreButton"[^>]*hidden/);
 assert.match(html, /加载下一页/);
 assert.match(html, /id="geeAssetError"/);
 assert.match(html, /id="geeTaskError"/);
+assert.match(html, /id="geeTaskMoreButton"[^>]*hidden/);
+assert.match(html, /加载更多/);
 assert.match(script, /elements\.geeClientId\.value = currentSettings\.geeClientId \|\| ""/);
 assert.match(script, /geeClientId: elements\.geeClientId\.value/);
 assert.match(script, /chrome\.identity\.getRedirectURL\(\)/);
@@ -177,7 +179,10 @@ assert.match(script, /const marker = `资产: \$\{assetId\}`/);
 assert.match(script, /elements\.prompt\.value = current \? `\$\{current\}\\n\$\{marker\}` : marker/);
 assert.match(script, /async function refreshGeeRest\(\)/);
 assert.match(script, /async function loadGeeAssets\(pageToken = ""\)/);
-assert.match(script, /async function loadGeeTasks\(\)/);
+assert.match(script, /async function loadGeeTasks\(pageToken = ""\)/);
+assert.match(script, /elements\.geeTaskMoreButton\.addEventListener\("click", \(\) => loadGeeTasks\(geeTaskNextToken\)/);
+assert.match(script, /let geeTaskNextToken = "";/);
+assert.match(script, /elements\.geeTaskMoreButton\.classList\.toggle\("hidden", !geeTaskNextToken\)/);
 // Assets and tasks keep independent loading/error state (m6): separate
 // loading flags, per-column error surfaces, and a refresh that clears both.
 assert.match(script, /let geeAssetLoading = false;/);

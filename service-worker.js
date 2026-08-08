@@ -246,7 +246,7 @@ async function geeRestRequest(kind, payload) {
       ok: true,
       requestId,
       items: result.items,
-      nextPageToken: kind === "assets" ? String(result.nextPageToken || "") : ""
+      nextPageToken: String(result.nextPageToken || "")
     };
   } finally {
     if (activeRequests.get(requestId) === controller) activeRequests.delete(requestId);
@@ -349,7 +349,7 @@ async function runGeeRestCall(kind, payload = {}) {
     throw new Error("请先在设置中填写 Google OAuth 客户端 ID / Project ID");
   }
   const call = (token) => (kind === "tasks"
-    ? listTasks(token, merged.projectId, { signal: payload.signal })
+    ? listTasks(token, merged.projectId, String(payload.pageToken || ""), { signal: payload.signal })
     : listAssets(token, merged.projectId, String(payload.pageToken || ""), { signal: payload.signal }));
 
   let usedToken = "";

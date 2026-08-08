@@ -1001,24 +1001,30 @@ assert.equal(geeAuthFlowCalls, 1, "cached token skips the auth flow");
 await dispatch({ type: "GEE_REST_LIST_ASSETS", payload: { requestId: "gee-assets-page", pageToken: "page-2" } });
 assert.match(geeUrls.at(-1), /pageToken=page-2/);
 
-// Tasks success: pageSize=50 and tolerant operation normalization.
+// Tasks success: pageSize=50, nextPageToken pass-through and tolerant
+// operation normalization.
 globalThis.fetch = async (url) => {
   geeUrls.push(String(url));
   return geeJson(200, {
     operations: [
       { name: "operations/a", metadata: { state: "RUNNING", description: "ingest image" } },
       { done: true }
-    ]
+    ],
+    nextPageToken: "tasks-page-2"
   });
 };
 const geeTasks = await dispatch({ type: "GEE_REST_LIST_TASKS", payload: { requestId: "gee-tasks" } });
 assert.equal(geeTasks.ok, true);
 assert.equal(geeTasks.requestId, "gee-tasks");
-assert.equal(geeTasks.nextPageToken, "", "task lists never paginate");
+assert.equal(geeTasks.nextPageToken, "tasks-page-2", "task lists paginate like assets");
 assert.equal(geeTasks.items[0].state, "RUNNING");
 assert.equal(geeTasks.items[0].summary, "ingest image");
 assert.equal(geeTasks.items[1].state, "DONE", "done flag maps to DONE without metadata");
 assert.match(geeUrls.at(-1), /\/operations\?pageSize=50$/);
+
+// Optional task pageToken is forwarded to the operations endpoint.
+await dispatch({ type: "GEE_REST_LIST_TASKS", payload: { requestId: "gee-tasks-page", pageToken: "tasks-page-2" } });
+assert.match(geeUrls.at(-1), /pageToken=tasks-page-2/);
 
 // 401: cache cleared, re-authorized exactly once, then success.
 delete sessionData.geeAccessTokenV1;
