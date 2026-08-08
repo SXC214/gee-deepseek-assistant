@@ -27,6 +27,26 @@ assert.equal(isOfficialDeepSeekV4("https://api.deepseek.com", "deepseek-v4"), fa
 assert.equal(isOfficialDeepSeekV4("https://api.deepseek.com", "gpt-4o"), false);
 assert.equal(isOfficialDeepSeekV4Flash("https://api.deepseek.com", "deepseek-v3-flash"), false);
 
+// Look-alike names sharing a prefix are not V4 models unless a "-" separator
+// introduces the suffix (m2).
+assert.equal(isOfficialDeepSeekV4("https://api.deepseek.com", "deepseek-v4-flashback"), false);
+assert.equal(isOfficialDeepSeekV4("https://api.deepseek.com", "deepseek-v4-flashback-latest"), false);
+assert.equal(isOfficialDeepSeekV4("https://api.deepseek.com", "deepseek-v4-prototype"), false);
+assert.equal(isOfficialDeepSeekV4Flash("https://api.deepseek.com", "deepseek-v4-flashback"), false);
+assert.equal(isOfficialDeepSeekV4("https://api.deepseek.com", "deepseek-v4-flash-latest"), true);
+assert.equal(isOfficialDeepSeekV4("https://api.deepseek.com", "deepseek-v4-pro-preview"), true);
+
+// Misclassified look-alikes keep the plain compatibility request shape.
+const flashback = buildChatRequestBody({
+  model: "deepseek-v4-flashback", messages,
+  settings: { baseUrl: "https://api.deepseek.com", thinkingEnabled: true },
+  stream: true
+});
+assert.equal("thinking" in flashback, false, "flashback must not receive thinking fields");
+assert.equal("reasoning_effort" in flashback, false);
+assert.equal("stream_options" in flashback, false);
+assert.equal(flashback.stream, false, "flashback stays on the non-streaming shape without opt-in");
+
 const suffixed = buildChatRequestBody({
   model: "deepseek-v4-flash-latest", messages,
   settings: { baseUrl: "https://api.deepseek.com", thinkingEnabled: true }
