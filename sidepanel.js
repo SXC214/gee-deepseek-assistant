@@ -698,12 +698,16 @@ async function uploadShapefileToCloud(entries, baseName) {
     }
   })).response;
   if (!uploadResult?.ok) throw new Error(uploadResult?.error || "上传文件字节失败");
-  const uris = uploadResult.result?.uris;
-  if (!uris?.length) throw new Error("上传成功但未返回任何资产 URI");
+  const uploadedFiles = Array.isArray(uploadResult.result?.files) ? uploadResult.result.files : [];
+  // table:import requires exactly one TableSource URI: the .shp file itself.
+  // Sidecar bytes (.shx/.dbf/.prj/…) are already staged and are discovered
+  // server-side, so the manifest must reference only the .shp gs:// URI.
+  const shpFile = uploadedFiles.find((file) => String(file?.name || "").toLowerCase().endsWith(".shp"));
+  if (!shpFile?.uri) throw new Error("上传结果中缺少 .shp 文件的资产 URI");
   setGeeRestStatus("正在入库 Earth Engine…");
   const importResult = await chrome.runtime.sendMessage({
     type: "GEE_REST_IMPORT_TABLE",
-    payload: { assetName: baseName, uris, requestId: crypto.randomUUID() }
+    payload: { assetName: baseName, uris: [shpFile.uri], requestId: crypto.randomUUID() }
   });
   if (!importResult?.ok) {
     if (importResult?.code === "ALREADY_EXISTS") {

@@ -171,6 +171,7 @@ function mockResponse(status, body = "") {
 }
 
 // ---- importTable: request shape, headers and LRO response pass-through.
+// The manifest must reference exactly one TableSource URI (the .shp file).
 {
   const calls = [];
   globalThis.fetch = async (url, options) => {
@@ -179,7 +180,7 @@ function mockResponse(status, body = "") {
   };
   const operation = await importTable("tok-import", "gee proj", {
     assetName: "boundaries",
-    uris: ["gs://bucket/a.csv", "gs://bucket/b.csv"],
+    uris: ["gs://bucket/boundaries.shp"],
     charset: "UTF-8"
   });
   assert.equal(calls.length, 1);
@@ -193,13 +194,18 @@ function mockResponse(status, body = "") {
   assert.deepEqual(body.tableManifest.sources, [{
     charset: "UTF-8",
     maxErrorMeters: 1,
-    uris: ["gs://bucket/a.csv", "gs://bucket/b.csv"]
-  }]);
+    uris: ["gs://bucket/boundaries.shp"]
+  }], "single source with exactly one URI");
   assert.equal(operation.done, false);
   assert.equal(operation.name, "projects/gee proj/operations/op-1");
 
-  await assert.rejects(importTable("tok", "proj", { uris: ["gs://b/x.csv"] }), /资产名称/);
+  await assert.rejects(importTable("tok", "proj", { uris: ["gs://b/x.shp"] }), /资产名称/);
   await assert.rejects(importTable("tok", "proj", { assetName: "t", uris: [] }), /上传来源/);
+  await assert.rejects(
+    importTable("tok", "proj", { assetName: "t", uris: ["gs://b/a.shp", "gs://b/a.dbf"] }),
+    /上传来源/,
+    "multiple URIs are rejected before hitting the API"
+  );
 }
 
 // ---- importTable errors: 409 maps to ALREADY_EXISTS; 503 is never retried.
@@ -260,6 +266,20 @@ function mockResponse(status, body = "") {
   const failure = await pollOperation("tok", "projects/p/operations/op-err").then(() => null, (err) => err);
   assert.equal(failure.code, "OPERATION_FAILED");
   assert.match(failure.message, /manifest invalid/);
+}
+
+// ---- pollOperation: same-name conflicts arrive as a FAILED LRO
+// ("Cannot overwrite asset '<name>'.") and map onto ALREADY_EXISTS so the
+// rename UX / noLocalFallback path keeps working (409 branch stays too).
+{
+  globalThis.fetch = async () => mockResponse(200, {
+    name: "projects/p/operations/op-dup",
+    done: true,
+    error: { code: 6, message: "Cannot overwrite asset 'projects/p/assets/dup'." }
+  });
+  const conflict = await pollOperation("tok", "projects/p/operations/op-dup").then(() => null, (err) => err);
+  assert.equal(conflict.code, "ALREADY_EXISTS");
+  assert.match(conflict.message, /Cannot overwrite asset/);
 }
 
 // ---- pollOperation: never-done operations hit the poll timeout.
