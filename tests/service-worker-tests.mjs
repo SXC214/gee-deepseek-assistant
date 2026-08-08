@@ -881,4 +881,66 @@ assert.equal(gee401Fail.ok, false);
 assert.match(gee401Fail.error, /Earth Engine 授权失败/);
 assert.equal(geeAuthFlowCalls, geeFailBefore + 2, "never re-authorizes more than once");
 
+// ---- OAuth concurrency (M7): cache misses share one authorization flow and
+// concurrent 401s never wipe a fresher token.
+function slowAuthFlow(tokens) {
+  let calls = 0;
+  return {
+    get calls() {
+      return calls;
+    },
+    async launch() {
+      calls += 1;
+      // Keep the flow in flight long enough for concurrent callers to arrive.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return `https://sw-tests.chromiumapp.org/#access_token=${tokens(calls)}&expires_in=3600`;
+    }
+  };
+}
+
+// Concurrent cache misses: exactly one interactive authorization popup.
+delete sessionData.geeAccessTokenV1;
+const sharedFlow = slowAuthFlow((count) => `shared-token-${count}`);
+globalThis.chrome.identity.launchWebAuthFlow = sharedFlow.launch;
+globalThis.fetch = async () => geeJson(200, { assets: [], nextPageToken: "" });
+const [concurrentA, concurrentB] = await Promise.all([
+  dispatch({ type: "GEE_REST_LIST_ASSETS", payload: { requestId: "gee-concurrent-a" } }),
+  dispatch({ type: "GEE_REST_LIST_ASSETS", payload: { requestId: "gee-concurrent-b" } })
+]);
+assert.equal(concurrentA.ok, true);
+assert.equal(concurrentB.ok, true);
+assert.equal(sharedFlow.calls, 1, "concurrent cache misses open exactly one auth flow");
+assert.equal(sessionData.geeAccessTokenV1.token, "shared-token-1");
+
+// Concurrent 401s on the same stale token: one re-auth, and the later 401
+// must not clear the fresh token the first request just stored.
+sessionData.geeAccessTokenV1 = {
+  token: "stale-token",
+  expiresAt: Date.now() + 60 * 60 * 1000,
+  clientId: "sw-client.apps.googleusercontent.com"
+};
+const reauthFlow = slowAuthFlow((count) => `fresh-token-${count}`);
+globalThis.chrome.identity.launchWebAuthFlow = reauthFlow.launch;
+let staleUses = 0;
+let freshUses = 0;
+globalThis.fetch = async (_url, options) => {
+  const auth = String(options?.headers?.Authorization || "");
+  if (auth.includes("stale-token")) {
+    staleUses += 1;
+    return geeJson(401, { error: { message: "expired" } });
+  }
+  freshUses += 1;
+  return geeJson(200, { assets: [], nextPageToken: "" });
+};
+const [reauthA, reauthB] = await Promise.all([
+  dispatch({ type: "GEE_REST_LIST_ASSETS", payload: { requestId: "gee-401-concurrent-a" } }),
+  dispatch({ type: "GEE_REST_LIST_ASSETS", payload: { requestId: "gee-401-concurrent-b" } })
+]);
+assert.equal(reauthA.ok, true);
+assert.equal(reauthB.ok, true);
+assert.equal(staleUses, 2, "both requests started with the stale token");
+assert.equal(freshUses, 2, "both retries succeeded with the fresh token");
+assert.equal(reauthFlow.calls, 1, "concurrent 401s re-authorize exactly once");
+assert.equal(sessionData.geeAccessTokenV1.token, "fresh-token-1", "the fresh token survives a late concurrent 401");
+
 console.log("Service worker tests passed.");

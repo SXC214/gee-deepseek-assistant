@@ -287,21 +287,48 @@ async function getGeeToken(interactive = true) {
   if (!merged.geeClientId) {
     throw new Error("请先在设置中填写 Google OAuth 客户端 ID / Project ID");
   }
-  const authUrl = buildAuthUrl(merged.geeClientId, chrome.identity.getRedirectURL());
-  let callbackUrl;
-  try {
-    callbackUrl = await chrome.identity.launchWebAuthFlow({ url: authUrl, interactive: Boolean(interactive) });
-  } catch (error) {
-    throw new Error(`Google 授权未完成：${safeError(error)}`);
-  }
-  const { accessToken, expiresIn } = parseAuthFragment(callbackUrl);
-  const record = { token: accessToken, expiresAt: Date.now() + expiresIn * 1000 };
-  await chrome.storage.session.set({ [GEE_TOKEN_KEY]: record });
-  return record.token;
+  return authorizeGeeToken(merged.geeClientId, interactive);
 }
 
-async function clearGeeTokenCache() {
-  await chrome.storage.session.remove(GEE_TOKEN_KEY);
+// One interactive authorization at a time per client ID: concurrent cache
+// misses share the in-flight flow instead of each opening a popup.
+const geeAuthInFlight = new Map();
+
+function authorizeGeeToken(clientId, interactive) {
+  const lockKey = String(clientId);
+  const existing = geeAuthInFlight.get(lockKey);
+  if (existing) return existing;
+  const pending = (async () => {
+    const authUrl = buildAuthUrl(clientId, chrome.identity.getRedirectURL());
+    let callbackUrl;
+    try {
+      callbackUrl = await chrome.identity.launchWebAuthFlow({ url: authUrl, interactive: Boolean(interactive) });
+    } catch (error) {
+      throw new Error(`Google 授权未完成：${safeError(error)}`);
+    }
+    const { accessToken, expiresIn } = parseAuthFragment(callbackUrl);
+    const record = {
+      token: accessToken,
+      expiresAt: Date.now() + expiresIn * 1000,
+      clientId: lockKey
+    };
+    await chrome.storage.session.set({ [GEE_TOKEN_KEY]: record });
+    return record.token;
+  })().finally(() => {
+    if (geeAuthInFlight.get(lockKey) === pending) geeAuthInFlight.delete(lockKey);
+  });
+  geeAuthInFlight.set(lockKey, pending);
+  return pending;
+}
+
+// Clears the cached token only when it is still the one this caller used, so a
+// later 401 in a concurrent batch never wipes a fresher token another request
+// just stored.
+async function invalidateGeeToken(staleToken) {
+  const record = (await chrome.storage.session.get(GEE_TOKEN_KEY))[GEE_TOKEN_KEY];
+  if (record?.token === staleToken) {
+    await chrome.storage.session.remove(GEE_TOKEN_KEY);
+  }
 }
 
 // Runs one REST call with the cached token; a 401 clears the cache and
@@ -316,12 +343,14 @@ async function runGeeRestCall(kind, payload = {}) {
     ? listTasks(token, merged.projectId, { signal: payload.signal })
     : listAssets(token, merged.projectId, String(payload.pageToken || ""), { signal: payload.signal }));
 
+  let usedToken = "";
   try {
-    return await call(await getGeeToken(true));
+    usedToken = await getGeeToken(true);
+    return await call(usedToken);
   } catch (error) {
     if (error?.code !== "UNAUTHORIZED") throw error;
   }
-  await clearGeeTokenCache();
+  await invalidateGeeToken(usedToken);
   try {
     return await call(await getGeeToken(true));
   } catch (retryError) {
@@ -822,7 +851,7 @@ export const __testing = {
     indexInFlight.clear();
   },
   getGeeToken,
-  clearGeeTokenCache,
+  invalidateGeeToken,
   runGeeRestCall
 };
 
