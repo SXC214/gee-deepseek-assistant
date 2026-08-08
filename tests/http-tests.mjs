@@ -191,6 +191,87 @@ function stalledBodyResponse() {
   assert.ok(elapsed < 3000, "did not wait beyond the header");
 }
 
+// --- Retry-After (HTTP-date) is honored on 429 (m3).
+{
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return calls === 1
+      ? mockResponse(429, { headers: { "Retry-After": new Date(Date.now() + 1000).toUTCString() } })
+      : mockResponse(200);
+  };
+  const started = Date.now();
+  const response = await fetchWithPolicy("https://limited-date.example.com", {
+    retryable: true,
+    maxRetries: 1,
+    backoffMs: 2
+  });
+  const elapsed = Date.now() - started;
+  assert.equal(response.status, 200);
+  assert.equal(calls, 2);
+  assert.ok(elapsed >= 800, `waited for HTTP-date Retry-After, elapsed=${elapsed}`);
+  assert.ok(elapsed < 3000, "did not wait beyond the date");
+}
+
+// --- Retry-After in the past retries without waiting.
+{
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return calls === 1
+      ? mockResponse(429, { headers: { "Retry-After": new Date(Date.now() - 60000).toUTCString() } })
+      : mockResponse(200);
+  };
+  const started = Date.now();
+  const response = await fetchWithPolicy("https://past-date.example.com", {
+    retryable: true,
+    maxRetries: 1,
+    backoffMs: 500
+  });
+  const elapsed = Date.now() - started;
+  assert.equal(response.status, 200);
+  assert.equal(calls, 2);
+  assert.ok(elapsed < 400, `past dates fall back to no wait, elapsed=${elapsed}`);
+}
+
+// --- maxRetryAfterMs caps long server delays; callers own the wait policy.
+{
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return calls === 1
+      ? mockResponse(429, { headers: { "Retry-After": "60" } })
+      : mockResponse(200);
+  };
+  const started = Date.now();
+  const response = await fetchWithPolicy("https://capped.example.com", {
+    retryable: true,
+    maxRetries: 1,
+    backoffMs: 2,
+    maxRetryAfterMs: 60
+  });
+  const elapsed = Date.now() - started;
+  assert.equal(response.status, 200);
+  assert.equal(calls, 2);
+  assert.ok(elapsed < 1000, `configured cap bounds the wait, elapsed=${elapsed}`);
+
+  // Malformed headers fall back to the exponential backoff.
+  calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return calls === 1
+      ? mockResponse(429, { headers: { "Retry-After": "not-a-date" } })
+      : mockResponse(200);
+  };
+  const malformed = await fetchWithPolicy("https://malformed.example.com", {
+    retryable: true,
+    maxRetries: 1,
+    backoffMs: 2
+  });
+  assert.equal(malformed.status, 200);
+  assert.equal(calls, 2, "unparseable Retry-After still retries via backoff");
+}
+
 // --- Network errors are retried.
 {
   let calls = 0;
