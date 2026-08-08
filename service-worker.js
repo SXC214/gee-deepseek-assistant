@@ -9,7 +9,7 @@ import {
 import { buildChatRequestBody, isOfficialDeepSeekV4, isValidReasoningEffort } from "./lib/api.js";
 import { consumeSseResponse } from "./lib/sse.js";
 import { RETRYABLE_STATUSES, createSemaphore, fetchWithPolicy, waitInterruptible } from "./lib/http.js";
-import { buildAuthUrl, listAssets, listTasks, parseAuthFragment, verifyOAuthState } from "./lib/gee-rest.js";
+import { buildAuthUrl, importTable, listAssets, listTasks, parseAuthFragment, pollOperation, verifyOAuthState } from "./lib/gee-rest.js";
 
 const DEFAULT_SETTINGS = Object.freeze({
   baseUrl: "https://api.deepseek.com",
@@ -159,6 +159,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "GEE_REST_IMPORT_TABLE") {
+    geeRestImportRequest(message.payload || {}).then(sendResponse, (error) => {
+      sendResponse({ ok: false, error: safeError(error) });
+    });
+    return true;
+  }
+
   if (message.type === "AI_ABORT") {
     abortRequest(String(message.requestId || ""));
     sendResponse({ ok: true });
@@ -248,6 +255,30 @@ async function geeRestRequest(kind, payload) {
       items: result.items,
       nextPageToken: String(result.nextPageToken || "")
     };
+  } finally {
+    if (activeRequests.get(requestId) === controller) activeRequests.delete(requestId);
+  }
+}
+
+// table:import + LRO polling is one logical chain: the 401 re-auth inside
+// runGeeRestCall retries the whole chain with a fresh token. Asset-name
+// conflicts are mapped to a structured, UI-ready error instead of throwing.
+async function geeRestImportRequest(payload) {
+  const requestId = String(payload.requestId || crypto.randomUUID());
+  const controller = registerRequest(requestId);
+  try {
+    const result = await runGeeRestCall("importTable", { ...payload, signal: controller.signal });
+    return {
+      ok: true,
+      requestId,
+      assetName: result.assetName,
+      operation: result.operation
+    };
+  } catch (error) {
+    if (error?.code === "ALREADY_EXISTS") {
+      return { ok: false, requestId, code: "ALREADY_EXISTS", error: "资产名已存在，请换一个名称" };
+    }
+    throw error;
   } finally {
     if (activeRequests.get(requestId) === controller) activeRequests.delete(requestId);
   }
@@ -348,9 +379,12 @@ async function runGeeRestCall(kind, payload = {}) {
   if (!merged.geeClientId || !merged.projectId) {
     throw new Error("请先在设置中填写 Google OAuth 客户端 ID / Project ID");
   }
-  const call = (token) => (kind === "tasks"
-    ? listTasks(token, merged.projectId, String(payload.pageToken || ""), { signal: payload.signal })
-    : listAssets(token, merged.projectId, String(payload.pageToken || ""), { signal: payload.signal }));
+  const call = (token) => {
+    if (kind === "importTable") return runImportTableChain(token, merged.projectId, payload);
+    return kind === "tasks"
+      ? listTasks(token, merged.projectId, String(payload.pageToken || ""), { signal: payload.signal })
+      : listAssets(token, merged.projectId, String(payload.pageToken || ""), { signal: payload.signal });
+  };
 
   let usedToken = "";
   try {
@@ -368,6 +402,21 @@ async function runGeeRestCall(kind, payload = {}) {
     }
     throw retryError;
   }
+}
+
+// POST table:import then poll the LRO to completion. Both steps share the
+// caller's signal, so a manual stop interrupts the ingest and the polling
+// loop alike; a 401 anywhere rejects the whole chain (see runGeeRestCall).
+async function runImportTableChain(token, project, payload) {
+  const assetName = String(payload.assetName || "").trim();
+  const operation = await importTable(
+    token,
+    project,
+    { assetName, uris: payload.uris, charset: payload.charset },
+    { signal: payload.signal }
+  );
+  const final = await pollOperation(token, operation?.name, { signal: payload.signal });
+  return { assetName, operation: final };
 }
 
 async function chat(payload) {

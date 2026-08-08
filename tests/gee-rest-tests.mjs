@@ -13,7 +13,9 @@ import {
   normalizeAsset,
   normalizeOperation,
   listAssets,
-  listTasks
+  listTasks,
+  importTable,
+  pollOperation
 } from "../lib/gee-rest.js";
 
 if (!globalThis.crypto) globalThis.crypto = webcrypto;
@@ -163,6 +165,119 @@ function mockResponse(status, body = "") {
   const exhausted = await listAssets("tok", "proj").then(() => null, (failure) => failure);
   assert.equal(calls, 3, "retry budget is exhausted after 3 attempts");
   assert.match(exhausted.message, /HTTP 503/);
+}
+
+// ---- importTable: request shape, headers and LRO response pass-through.
+{
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return mockResponse(200, { name: "projects/gee proj/operations/op-1", done: false, metadata: { type: "INGEST_TABLE" } });
+  };
+  const operation = await importTable("tok-import", "gee proj", {
+    assetName: "boundaries",
+    uris: ["gs://bucket/a.csv", "gs://bucket/b.csv"],
+    charset: "UTF-8"
+  });
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].url.endsWith("/projects/gee%20proj/table:import"), "project is URL-encoded in the path");
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.headers.Authorization, "Bearer tok-import");
+  assert.equal(calls[0].options.headers["Content-Type"], "application/json");
+  const body = JSON.parse(calls[0].options.body);
+  assert.match(body.requestId, /^[0-9a-f-]{36}$/i, "requestId is a UUID");
+  assert.equal(body.tableManifest.name, "projects/gee proj/assets/boundaries", "the manifest keeps the raw project name");
+  assert.deepEqual(body.tableManifest.sources, [{
+    charset: "UTF-8",
+    maxErrorMeters: 1,
+    uris: ["gs://bucket/a.csv", "gs://bucket/b.csv"]
+  }]);
+  assert.equal(operation.done, false);
+  assert.equal(operation.name, "projects/gee proj/operations/op-1");
+
+  await assert.rejects(importTable("tok", "proj", { uris: ["gs://b/x.csv"] }), /资产名称/);
+  await assert.rejects(importTable("tok", "proj", { assetName: "t", uris: [] }), /上传来源/);
+}
+
+// ---- importTable errors: 409 maps to ALREADY_EXISTS; 503 is never retried.
+{
+  globalThis.fetch = async () => mockResponse(409, { error: { message: "asset exists", status: "ALREADY_EXISTS" } });
+  const conflict = await importTable("tok", "proj", { assetName: "t", uris: ["gs://b/x.csv"] }).then(() => null, (failure) => failure);
+  assert.equal(conflict.code, "ALREADY_EXISTS");
+  assert.equal(conflict.status, 409);
+  assert.match(conflict.message, /asset exists/);
+
+  let postCalls = 0;
+  globalThis.fetch = async () => {
+    postCalls += 1;
+    return mockResponse(503, {});
+  };
+  const failure = await importTable("tok", "proj", { assetName: "t", uris: ["gs://b/x.csv"] }).then(() => null, (err) => err);
+  assert.equal(postCalls, 1, "non-idempotent POSTs never auto-retry");
+  assert.match(failure.message, /HTTP 503/);
+
+  globalThis.fetch = async () => mockResponse(401, { error: { message: "expired" } });
+  const unauthorized = await importTable("tok", "proj", { assetName: "t", uris: ["gs://b/x.csv"] }).then(() => null, (err) => err);
+  assert.equal(unauthorized.code, "UNAUTHORIZED", "401 keeps the re-auth contract");
+}
+
+// ---- pollOperation: polls until done and reuses the retryable GET path.
+{
+  __timings.importPollIntervalMs = 5;
+  const polls = [];
+  let pollCount = 0;
+  globalThis.fetch = async (url, options) => {
+    polls.push({ url, options });
+    pollCount += 1;
+    if (pollCount < 2) return mockResponse(200, { name: "projects/p/operations/op-9", done: false, metadata: { type: "INGEST_TABLE" } });
+    if (pollCount < 3) return mockResponse(503, {});
+    return mockResponse(200, {
+      name: "projects/p/operations/op-9",
+      done: true,
+      response: { name: "projects/p/assets/tbl", type: "TABLE" }
+    });
+  };
+  const final = await pollOperation("tok-poll", "projects/p/operations/op-9");
+  assert.equal(polls.length, 3, "running -> 503 (retried once) -> done");
+  for (const call of polls) {
+    assert.equal(call.url, `${GEE_REST_BASE}/projects/p/operations/op-9`);
+    assert.equal(call.options.headers.Authorization, "Bearer tok-poll");
+  }
+  assert.equal(final.done, true);
+  assert.equal(final.response.type, "TABLE");
+}
+
+// ---- pollOperation: operation.error rejects with the server detail.
+{
+  globalThis.fetch = async () => mockResponse(200, {
+    name: "projects/p/operations/op-err",
+    done: true,
+    error: { code: 3, message: "manifest invalid" }
+  });
+  const failure = await pollOperation("tok", "projects/p/operations/op-err").then(() => null, (err) => err);
+  assert.equal(failure.code, "OPERATION_FAILED");
+  assert.match(failure.message, /manifest invalid/);
+}
+
+// ---- pollOperation: never-done operations hit the poll timeout.
+{
+  __timings.importPollIntervalMs = 2;
+  globalThis.fetch = async () => mockResponse(200, { name: "projects/p/operations/op-slow", done: false });
+  const timeout = await pollOperation("tok", "projects/p/operations/op-slow", { timeoutMs: 30 }).then(() => null, (err) => err);
+  assert.equal(timeout.code, "POLL_TIMEOUT");
+  assert.match(timeout.message, /未在/);
+  __timings.importPollIntervalMs = 2500;
+}
+
+// ---- pollOperation: an external abort interrupts the wait between polls.
+{
+  __timings.importPollIntervalMs = 200;
+  globalThis.fetch = async () => mockResponse(200, { name: "projects/p/operations/op-abort", done: false });
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 20);
+  const aborted = await pollOperation("tok", "projects/p/operations/op-abort", { signal: controller.signal }).then(() => null, (err) => err);
+  assert.equal(aborted.name, "AbortError");
+  __timings.importPollIntervalMs = 2500;
 }
 
 // ---- Authorization orchestration inside the service worker.

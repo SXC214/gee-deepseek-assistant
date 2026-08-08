@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import { createOrchestrator } from "../lib/orchestrator.js";
+import { __timings as geeRestTimings } from "../lib/gee-rest.js";
 
 if (!globalThis.crypto) globalThis.crypto = webcrypto;
 
@@ -1184,6 +1185,120 @@ const gee401Fail = await dispatch({ type: "GEE_REST_LIST_TASKS", payload: { requ
 assert.equal(gee401Fail.ok, false);
 assert.match(gee401Fail.error, /Earth Engine 授权失败/);
 assert.equal(geeAuthFlowCalls, geeFailBefore + 2, "never re-authorizes more than once");
+
+// ---- GEE_REST_IMPORT_TABLE: table:import + LRO polling as one chain.
+function importLro(done, extra = {}) {
+  return geeJson(200, { name: "projects/gee proj/operations/import-op", done, metadata: { type: "INGEST_TABLE" }, ...extra });
+}
+
+// Success: POST table:import then poll until done:true.
+{
+  const importCalls = [];
+  let pollCount = 0;
+  globalThis.fetch = async (url, options) => {
+    importCalls.push({ url: String(url), options });
+    if (options.method === "POST") return importLro(false);
+    pollCount += 1;
+    return pollCount < 2 ? importLro(false) : importLro(true, { response: { name: "projects/gee proj/assets/imported", type: "TABLE" } });
+  };
+  const importOk = await dispatch({
+    type: "GEE_REST_IMPORT_TABLE",
+    payload: { requestId: "gee-import-ok", assetName: "imported", uris: ["gs://bucket/a.csv"], charset: "UTF-8" }
+  });
+  assert.equal(importOk.ok, true);
+  assert.equal(importOk.requestId, "gee-import-ok");
+  assert.equal(importOk.assetName, "imported");
+  assert.equal(importOk.operation.done, true, "the final polled operation is returned");
+  assert.equal(importOk.operation.response.type, "TABLE");
+  const post = importCalls[0];
+  assert.match(post.url, /\/projects\/gee%20proj\/table:import$/);
+  const manifest = JSON.parse(post.options.body);
+  assert.match(manifest.requestId, /^[0-9a-f-]{36}$/i, "import carries a UUID requestId");
+  assert.equal(manifest.tableManifest.name, "projects/gee proj/assets/imported");
+  assert.deepEqual(manifest.tableManifest.sources, [{ charset: "UTF-8", maxErrorMeters: 1, uris: ["gs://bucket/a.csv"] }]);
+  assert.match(importCalls[1].url, /\/v1\/projects\/gee proj\/operations\/import-op$/, "polls GET the operation resource");
+  assert.equal(importCalls[1].options.method, undefined, "polling uses GET");
+}
+
+// 409 conflict: structured, UI-ready error instead of a thrown message.
+{
+  globalThis.fetch = async () => geeJson(409, { error: { message: "already exists", status: "ALREADY_EXISTS" } });
+  const importConflict = await dispatch({
+    type: "GEE_REST_IMPORT_TABLE",
+    payload: { requestId: "gee-import-409", assetName: "dup", uris: ["gs://bucket/a.csv"] }
+  });
+  assert.equal(importConflict.ok, false);
+  assert.equal(importConflict.error, "资产名已存在，请换一个名称");
+  assert.equal(importConflict.code, "ALREADY_EXISTS");
+}
+
+// Validation failures surface as readable errors without any fetch.
+{
+  let validationFetches = 0;
+  globalThis.fetch = async () => {
+    validationFetches += 1;
+    return geeJson(200, {});
+  };
+  const missingName = await dispatch({ type: "GEE_REST_IMPORT_TABLE", payload: { requestId: "gee-import-no-name", uris: ["gs://b/a.csv"] } });
+  assert.equal(missingName.ok, false);
+  assert.match(missingName.error, /资产名称/);
+  const missingUris = await dispatch({ type: "GEE_REST_IMPORT_TABLE", payload: { requestId: "gee-import-no-uris", assetName: "t" } });
+  assert.equal(missingUris.ok, false);
+  assert.match(missingUris.error, /上传来源/);
+  assert.equal(validationFetches, 0, "invalid payloads never hit the network");
+}
+
+// 401 mid-chain: the whole import+poll chain retries once with a fresh token.
+{
+  delete sessionData.geeAccessTokenV1;
+  const chainCalls = [];
+  globalThis.fetch = async (url, options) => {
+    chainCalls.push({ url: String(url), auth: options.headers.Authorization, method: options.method || "GET" });
+    if (options.method === "POST" && chainCalls.filter((call) => call.method === "POST").length === 1) {
+      return geeJson(401, { error: { message: "expired" } });
+    }
+    if (options.method === "POST") return importLro(false);
+    return importLro(true);
+  };
+  const importFlowBefore = geeAuthFlowCalls;
+  const importReauth = await dispatch({
+    type: "GEE_REST_IMPORT_TABLE",
+    payload: { requestId: "gee-import-401", assetName: "retry", uris: ["gs://bucket/a.csv"] }
+  });
+  assert.equal(importReauth.ok, true);
+  assert.equal(chainCalls.filter((call) => call.method === "POST").length, 2, "the POST is retried after re-auth");
+  assert.notEqual(chainCalls[0].auth, chainCalls[1].auth, "the retried chain uses the fresh token");
+  assert.equal(geeAuthFlowCalls, importFlowBefore + 2, "initial auth plus exactly one re-auth for the whole chain");
+}
+
+// Operation failure during polling surfaces the server detail.
+{
+  globalThis.fetch = async (_url, options) => (
+    options.method === "POST" ? importLro(false) : importLro(true, { error: { code: 3, message: "bad manifest" } })
+  );
+  const importFailed = await dispatch({
+    type: "GEE_REST_IMPORT_TABLE",
+    payload: { requestId: "gee-import-op-error", assetName: "bad", uris: ["gs://bucket/a.csv"] }
+  });
+  assert.equal(importFailed.ok, false);
+  assert.match(importFailed.error, /bad manifest/);
+}
+
+// AI_ABORT interrupts the polling loop between polls.
+{
+  geeRestTimings.importPollIntervalMs = 20;
+  globalThis.fetch = async (_url, options) => (options.method === "POST" ? importLro(false) : importLro(false));
+  const importAbortPromise = dispatch({
+    type: "GEE_REST_IMPORT_TABLE",
+    payload: { requestId: "gee-import-abort", assetName: "slow", uris: ["gs://bucket/a.csv"] }
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await dispatch({ type: "AI_ABORT", requestId: "gee-import-abort" });
+  const importAborted = await importAbortPromise;
+  assert.equal(importAborted.ok, false);
+  assert.equal(importAborted.error, "请求已停止", "abort reaches the polling loop");
+  geeRestTimings.importPollIntervalMs = 2500;
+}
 
 // ---- OAuth concurrency (M7): cache misses share one authorization flow and
 // concurrent 401s never wipe a fresher token.
