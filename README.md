@@ -110,6 +110,13 @@ DeepSeek 默认 API 地址为 `https://api.deepseek.com`。扩展会调用其 `/
 
 Earth Engine 没有公开的 Code Editor 插件接口。如果 Google 更新页面结构，需要调整 `page-bridge.js` 或 `content-script.js` 中的适配器。
 
+## 已知限制
+
+- Google Earth Engine 页面没有公开的插件接口，编辑器桥接与 Console 读取依赖当前页面 DOM 结构；Google 改版页面可能导致这些功能失效。
+- 未打包（开发者模式加载）的扩展 ID 可能变化，届时需同步更新 GEE REST 直连 OAuth 客户端的重定向 URI（详见上文“REST 直连”一节的已知限制）。
+- `compatibleStreaming` 是实验性开关：启用后对 OpenAI 兼容端点使用普通流式，但该路径不解析思考内容。
+- Dataset Search 与 Docs Search 依赖 `developers.google.com` 可达；该站点不可达时检索功能无法使用。
+
 ## 开发与测试
 
 无需构建步骤。修改源码后，在扩展管理页点击“重新加载”即可。

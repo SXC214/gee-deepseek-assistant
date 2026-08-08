@@ -83,3 +83,17 @@
 - 控制台报错：`Uncaught ReferenceError: Cannot access 'eventsBound' before initialization`
 - 所在层：UI 层（sidepanel.js 顶层执行顺序：顶层 `initialize()` 调用早于 `let eventsBound` 声明，触发暂时性死区 TDZ）
 - 状态：已修复
+
+---
+
+## 审核闭环记录
+
+ISS-001~007 均已修复并验证，以下为 v0.4.0 发布前的审核闭环过程：
+
+1. **codex 首轮审核**：结论「不通过」，共 17 项意见，完整记录见 `docs/CODEX-REVIEW-R1.md`。
+2. **返工与补漏**：按首轮意见分两批返工，并对 m4 项做补漏修复。
+3. **子代理复审（第一轮）**：结论「有条件通过」，新增意见 M-1、m-1。
+4. **最终修复**：提交 `00219ba`（service-worker 单飞等待者解耦 abort 信号）与 `ead5544`（stream-chat HTTP 错误体读取纳入尝试超时与 abort 信号）。
+5. **最终签核**：复审通过，v0.4.0 具备发布条件。
+
+遗留建议：后续迭代补充 m6（资产/任务错误隔离）的行为级测试（对应复审 Nit n-1）。
