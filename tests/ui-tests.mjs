@@ -79,6 +79,23 @@ assert.match(script, /function renderPlanTodoList\(plan\)/);
 assert.match(script, /plan\.todoList\?\.length/);
 assert.match(script, /upsertPlanAnswerText\(elements\.prompt\.value/);
 assert.match(script, /已叠加 \$\{answerCount\} 个问题的答案/);
+// ISS-009 regression guard: checked plan options persist on the card across
+// re-renders, and answers that already left the input are locked so they can
+// never be injected (and re-sent) a second time.
+assert.match(script, /let planOptionSelections = new Map\(\)/);
+assert.match(script, /let submittedPlanAnswerIds = new Set\(\)/);
+assert.match(script, /const markerId = planAnswerMarkerId\(\{ questionId: question\?\.id, prompt \}\)/);
+assert.match(script, /const answered = Boolean\(markerId\) && submittedPlanAnswerIds\.has\(markerId\)/);
+assert.match(script, /button\.classList\.toggle\("selected", selected\);\s+button\.setAttribute\("aria-pressed", String\(selected\)\);\s+button\.disabled = answered;/);
+assert.match(script, /planOptionSelections\.set\(markerId, \{ optionId: option\?\.id \|\| "", label: option\?\.label \|\| "" \}\)/);
+assert.match(script, /if \(markerId && submittedPlanAnswerIds\.has\(markerId\)\)/);
+assert.match(script, /该问题的答案已提交过，未重复注入输入框/);
+assert.match(script, /for \(const markerId of collectPlanAnswerMarkerIds\(prompt\)\)/);
+assert.match(script, /function resetPlanOptionSelections\(\)/);
+assert.match(script, /candidate = null;\s+resetPlanOptionSelections\(\);/);
+assert.match(script, /orchestrator\.updateActivePlan\(null\);\s+resetPlanOptionSelections\(\);/);
+assert.match(styles, /\.plan-question-card\.plan-question-answered/);
+assert.match(styles, /\.plan-answered-hint/);
 assert.match(script, /if \(!currentSettings\.hasApiKey\) openSettings\(\{ focusKey: true \}\)/);
 assert.match(script, /baseRevision: baseState\?\.revision/);
 assert.match(script, /tabId: baseState\?\.tabId/);

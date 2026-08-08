@@ -396,6 +396,9 @@ details.activity-card[open] > summary::before { transform: rotate(90deg); }
 .plan-option.selected,
 .plan-option[aria-pressed="true"] { border-color: var(--blue); background: var(--blue-soft); box-shadow: 0 0 0 2px rgba(23, 105, 224, 0.08); }
 .recommended-mark { margin-left: 5px; color: var(--green); font-size: 9px; font-weight: 600; }
+.plan-question-card.plan-question-answered { border-style: dashed; background: #f6fbf4; }
+.plan-question-card.plan-question-answered .plan-option { cursor: default; }
+.plan-answered-hint { color: var(--green); font-weight: 600; }
 
 .candidate-code-details { margin: 0 0 10px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
 .candidate-code-details summary { padding: 8px 9px; color: var(--blue-dark); font-weight: 600; }

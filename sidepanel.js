@@ -27,10 +27,12 @@ import {
   removeQueuedMessage
 } from "./lib/queue.js";
 import {
+  collectPlanAnswerMarkerIds,
   countPlanAnswerBlocks,
   createReasoningView,
   getPlanActionState,
   isNearScrollEnd,
+  planAnswerMarkerId,
   setComposerModeView,
   setStatusView,
   setPlanToolControls,
@@ -58,6 +60,11 @@ let initRetryButton = null;
 let followConversation = true;
 let consoleReadAttempted = false;
 let eventsBound = false;
+// ISS-009: plan-question option state lives here so re-rendered plan cards
+// keep their checked option, and answers that already left the input can
+// never be injected (and re-sent) a second time.
+let planOptionSelections = new Map();
+let submittedPlanAnswerIds = new Set();
 
 const orchestrator = createOrchestrator({
   runtime: chrome.runtime,
@@ -620,6 +627,7 @@ async function startNewConversation() {
   chatHistory = [];
   orchestrator.resetForNewConversation();
   candidate = null;
+  resetPlanOptionSelections();
   elements.conversation.replaceChildren(
     elements.conversationEmpty,
     elements.toolResults,
@@ -869,8 +877,14 @@ async function persistActivePlan(plan = orchestrator.getActivePlan()) {
 
 async function clearActivePlan() {
   orchestrator.updateActivePlan(null);
+  resetPlanOptionSelections();
   await chrome.storage.local.remove(ACTIVE_PLAN_KEY);
   renderPlan();
+}
+
+function resetPlanOptionSelections() {
+  planOptionSelections = new Map();
+  submittedPlanAnswerIds = new Set();
 }
 
 function selectComposerMode(planMode, { quiet = false } = {}) {
@@ -957,6 +971,13 @@ async function sendPrompt(event) {
   if (!initialized) return showError("助手仍在初始化，请稍候");
   if (!prompt) return;
   const planRequest = elements.planMode.checked;
+  // ISS-009: lock every plan answer block contained in the outgoing text so a
+  // re-rendered question card can never inject the same answer twice.
+  if (planRequest) {
+    for (const markerId of collectPlanAnswerMarkerIds(prompt)) {
+      submittedPlanAnswerIds.add(markerId);
+    }
+  }
   elements.prompt.value = "";
   if (busy) {
     enqueuePrompt(prompt, planRequest);
@@ -1261,8 +1282,12 @@ function appendPlanValue(value) {
 
 function renderPlanQuestion(question) {
   const prompt = question?.prompt || String(question || "");
+  const markerId = planAnswerMarkerId({ questionId: question?.id, prompt });
+  const answered = Boolean(markerId) && submittedPlanAnswerIds.has(markerId);
+  const selection = markerId ? planOptionSelections.get(markerId) : null;
   const card = document.createElement("article");
   card.className = "plan-question-card";
+  if (answered) card.classList.add("plan-question-answered");
   const questionText = document.createElement("p");
   questionText.textContent = prompt;
   card.append(questionText);
@@ -1288,18 +1313,30 @@ function renderPlanQuestion(question) {
         description.textContent = option.description;
         button.append(description);
       }
-      button.setAttribute("aria-pressed", "false");
+      // ISS-009: restore the persisted selection on every re-render so the
+      // checked state stays visible on the card.
+      const selected = Boolean(selection && (selection.optionId === option.id || selection.label === option.label));
+      button.classList.toggle("selected", selected);
+      button.setAttribute("aria-pressed", String(selected));
+      button.disabled = answered;
       button.addEventListener("click", () => selectPlanOption(question, option, button));
       options.append(button);
     }
     card.append(options);
   }
 
-  if (question?.allowFreeText !== false) {
+  if (answered) {
+    const answeredHint = document.createElement("span");
+    answeredHint.className = "hint plan-answered-hint";
+    answeredHint.textContent = selection?.label
+      ? `已选择「${selection.label}」，答案已提交；如需修改请在输入框补充说明。`
+      : "该问题的答案已提交；如需修改请在输入框补充说明。";
+    card.append(answeredHint);
+  } else if (question?.allowFreeText !== false) {
     const hint = document.createElement("span");
     hint.className = "hint";
     hint.textContent = question?.options?.length
-      ? "不同问题的选项会自动叠加；同一问题重新选择会替换原答案，仍可继续修改。"
+      ? "不同问题的选项会自动叠加；同一问题重新选择会替换原答案，勾选状态会保留在卡片上。"
       : "请在下方输入框中回答；可以补充自己的条件。";
     card.append(hint);
   }
@@ -1308,11 +1345,21 @@ function renderPlanQuestion(question) {
 
 function selectPlanOption(question, option, selectedButton) {
   const prompt = question?.prompt || String(question || "");
+  const markerId = planAnswerMarkerId({ questionId: question?.id, prompt });
+  // ISS-009: an answer that already left the input must never be injected a
+  // second time; the card keeps its checked state instead.
+  if (markerId && submittedPlanAnswerIds.has(markerId)) {
+    setStatus("该问题的答案已提交过，未重复注入输入框；如需修改请在输入框中补充说明");
+    return;
+  }
   elements.prompt.value = upsertPlanAnswerText(elements.prompt.value, {
     questionId: question?.id,
     prompt,
     option
   });
+  if (markerId) {
+    planOptionSelections.set(markerId, { optionId: option?.id || "", label: option?.label || "" });
+  }
   for (const button of selectedButton?.parentElement?.querySelectorAll?.(".plan-option") || []) {
     const selected = button === selectedButton;
     button.classList.toggle("selected", selected);

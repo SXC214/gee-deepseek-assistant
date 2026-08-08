@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import {
+  collectPlanAnswerMarkerIds,
   createReasoningView,
   countPlanAnswerBlocks,
   getPlanActionState,
   isNearScrollEnd,
+  planAnswerMarkerId,
   resolveStatusState,
   setComposerModeView,
   setPlanToolControls,
@@ -198,6 +200,28 @@ assert.doesNotMatch(answerDraft, /逐年均值/);
 assert.match(answerDraft, /整个时期单一均值/);
 assert.match(answerDraft, /全州区域平均/);
 assert.match(answerDraft, /额外要求：保留年度时间序列/);
+
+// ISS-009: the marker id used to remember a checked option on the plan card
+// must be identical to the id inside the injected answer block, and outgoing
+// text exposes exactly those ids so submitted answers can be locked.
+assert.equal(planAnswerMarkerId({ questionId: "time_aggregation", prompt: "任何问题" }), "time_aggregation");
+assert.equal(planAnswerMarkerId({ questionId: "", prompt: "" }), "");
+const freeTextPrompt = "您希望输出什么形式的结果？";
+const freeTextDraft = upsertPlanAnswerText("", {
+  questionId: "",
+  prompt: freeTextPrompt,
+  option: { label: "年度序列图" }
+});
+const fallbackId = planAnswerMarkerId({ questionId: "", prompt: freeTextPrompt });
+assert.ok(fallbackId, "questions without a model id fall back to a stable prompt hash");
+assert.match(freeTextDraft, new RegExp(`【计划问题 ${fallbackId}】`));
+assert.deepEqual(
+  collectPlanAnswerMarkerIds(`${answerDraft}\n\n${freeTextDraft}`),
+  ["time_aggregation", "spatial_statistic", fallbackId],
+  "submitted-answer locking must see exactly the blocks inside the outgoing text"
+);
+assert.equal(collectPlanAnswerMarkerIds("没有答案块的普通文本").length, 0);
+assert.equal(collectPlanAnswerMarkerIds("【计划问题结束 x】").length, 0, "end markers are never collected");
 
 const fakeDocument = { createElement: (tagName) => new FakeElement(tagName) };
 const conversation = new FakeElement("section");
