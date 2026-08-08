@@ -273,5 +273,57 @@ assert.match(styles, /\.gee-rest-item-type\s*\{/);
 assert.match(styles, /\.gee-redirect-uri\s*\{/);
 assert.ok(manifest.permissions.includes("identity"), "identity permission backs the independent OAuth flow");
 assert.equal(packageJson.version, manifest.version);
+// Shapefile upload entry: the button sits next to 刷新 in the panel header
+// row and the hidden multi-file input lives inside the panel; both ids must
+// be referenced from sidepanel.js (the top-of-file guard already enforces
+// the reverse direction and id uniqueness).
+assert.match(html, /id="shpUploadButton" class="compact-button" type="button">上传 Shapefile<\/button>/);
+assert.match(html, /id="shpFileInput" type="file" multiple accept="\.shp,\.shx,\.dbf,\.prj,\.cpg" class="hidden"/);
+assert.ok(html.indexOf('id="geeRestRefreshButton"') < html.indexOf('id="shpUploadButton"'), "upload button must sit after the refresh button");
+assert.ok(html.indexOf('id="shpUploadButton"') < html.indexOf('id="geeRestCloseButton"'), "upload button must stay inside the header button row");
+assert.ok(references.has("shpUploadButton"), "sidepanel.js must reference elements.shpUploadButton");
+assert.ok(references.has("shpFileInput"), "sidepanel.js must reference elements.shpFileInput");
+assert.match(script, /elements\.shpUploadButton\.addEventListener\("click", \(\) => elements\.shpFileInput\.click\(\)\)/);
+assert.match(script, /elements\.shpFileInput\.addEventListener\("change", \(\) => handleShpUpload\(\)\.catch\(showError\)\)/);
+// Upload orchestration: validate → cloud-first (upload URL → byte upload →
+// table import → refresh) with a confirmed local parse fallback.
+assert.match(script, /import \{[\s\S]*SHP_CLOUD_DIRECT_MAX_BYTES,[\s\S]*validateShapefileSet[\s\S]*\} from "\.\/lib\/shapefile\.js"/);
+assert.match(script, /import \{[\s\S]*isQuotaExceededError,[\s\S]*readShpAssets,[\s\S]*writeShpAssets[\s\S]*\} from "\.\/lib\/storage\.js"/);
+assert.match(script, /async function handleShpUpload\(\)/);
+assert.match(script, /const validation = validateShapefileSet\(entries\)/);
+assert.match(script, /setGeeColumnError\("assets", validation\.error\)/);
+assert.match(script, /if \(totalBytes > SHP_CLOUD_DIRECT_MAX_BYTES\)/);
+assert.match(script, /type: "SHP_GET_UPLOAD_URL"/);
+assert.match(script, /type: "SHP_UPLOAD_BLOB"/);
+assert.match(script, /files: entries\.map\(\(\{ name, buffer \}\) => \(\{ name, buffer \}\)\)/);
+assert.match(script, /type: "GEE_REST_IMPORT_TABLE"/);
+assert.match(script, /importResult\?\.code === "ALREADY_EXISTS"/);
+assert.match(script, /conflict\.noLocalFallback = true/);
+assert.match(script, /正在获取上传地址…/);
+assert.match(script, /正在上传文件字节…/);
+assert.match(script, /正在入库 Earth Engine…/);
+assert.match(script, /await refreshGeeRest\(\);/);
+// Local fallback: user confirmation gate, progress feedback, quota-aware
+// persistence and a re-render; file input reset keeps repeat selection alive.
+assert.match(script, /window\.confirm\(/);
+assert.match(script, /parseShapefileToGeoJson\(buffers, \{/);
+assert.match(script, /onProgress: \(\{ processed, total, done \}\)/);
+assert.match(script, /readShpAssets\(chrome\.storage\.local\)/);
+assert.match(script, /writeShpAssets\(chrome\.storage\.local/);
+assert.match(script, /if \(isQuotaExceededError\(error\)\)/);
+assert.match(script, /input\.value = ""/);
+assert.match(script, /elements\.shpUploadButton\.disabled = true/);
+// Local SHP section in the asset column: independent of the cloud list,
+// with inject-script / inject-prompt / delete actions per row.
+assert.match(script, /let localShpAssets = \[\];/);
+assert.match(script, /localShpAssets = await readShpAssets\(chrome\.storage\.local\)/);
+assert.match(script, /type\.textContent = "SHP·本地"/);
+assert.match(script, /scriptButton\.textContent = "注入脚本"/);
+assert.match(script, /deleteButton\.textContent = "删除"/);
+assert.match(script, /buildFeatureCollectionSnippet\(asset\.name, asset\.geoJson\)/);
+assert.match(script, /payload: \{ code: snippet, mode: "insert" \}/);
+assert.match(script, /function injectShpAssetIntoPrompt\(asset\)/);
+assert.match(script, /资产: \$\{asset\.id\}（\$\{asset\.featureCount\} 个要素，bbox \[\$\{bboxText\}\]，字段: \$\{fieldsText\}）/);
+assert.match(script, /async function deleteLocalShpAsset\(assetId\)/);
 
 console.log("UI consistency tests passed.");

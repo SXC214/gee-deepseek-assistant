@@ -14,15 +14,24 @@ import {
   CHAT_HISTORY_KEY,
   CODE_CANDIDATE_KEY,
   MESSAGE_QUEUE_KEY,
+  isQuotaExceededError,
   readActivePlan,
   readChatHistory,
   readCodeCandidate,
   readMessageQueue,
+  readShpAssets,
   serializeActivePlan,
   serializeCodeCandidate,
   setWithQuotaEviction,
-  writeMessageQueueSnapshot
+  writeMessageQueueSnapshot,
+  writeShpAssets
 } from "./lib/storage.js";
+import {
+  SHP_CLOUD_DIRECT_MAX_BYTES,
+  buildFeatureCollectionSnippet,
+  parseShapefileToGeoJson,
+  validateShapefileSet
+} from "./lib/shapefile.js";
 import {
   prioritizeQueuedMessage,
   removeQueuedMessage
@@ -114,6 +123,7 @@ async function initialize() {
     await restoreChatHistory();
     await restoreMessageQueue();
     await restoreActivePlan();
+    await restoreLocalShpAssets();
     await readEditor({ quiet: true });
     await restoreCandidate();
     initialized = true;
@@ -195,6 +205,8 @@ function bindEvents() {
   elements.geeRestButton.addEventListener("click", () => toggleGeeRestPanel());
   elements.geeRestCloseButton.addEventListener("click", () => toggleGeeRestPanel(false));
   elements.geeRestRefreshButton.addEventListener("click", () => refreshGeeRest().catch(showError));
+  elements.shpUploadButton.addEventListener("click", () => elements.shpFileInput.click());
+  elements.shpFileInput.addEventListener("change", () => handleShpUpload().catch(showError));
   elements.geeAssetMoreButton.addEventListener("click", () => loadGeeAssets(geeAssetNextToken).catch(showError));
   elements.geeTaskMoreButton.addEventListener("click", () => loadGeeTasks(geeTaskNextToken).catch(showError));
   elements.copyRedirectUriButton.addEventListener("click", copyGeeRedirectUri);
@@ -365,6 +377,16 @@ let geeAssetNextToken = "";
 let geeTaskNextToken = "";
 let geeAssetLoading = false;
 let geeTaskLoading = false;
+// Local shapefile assets (shpAssetsV1) render in the same asset column but
+// stay fully independent from the cloud list: they load from local storage,
+// survive cloud auth failures and never depend on geeRestConfigured().
+let localShpAssets = [];
+let shpUploading = false;
+
+async function restoreLocalShpAssets() {
+  localShpAssets = await readShpAssets(chrome.storage.local);
+  renderGeeAssets();
+}
 
 function renderGeeRedirectUri() {
   try {
@@ -514,7 +536,7 @@ async function loadGeeTasks(pageToken = "") {
 function renderGeeAssets() {
   const list = elements.geeAssetList;
   list.replaceChildren();
-  if (!geeAssetItems.length) {
+  if (!geeAssetItems.length && !localShpAssets.length) {
     if (geeRestConfigured()) {
       const empty = document.createElement("p");
       empty.className = "hint";
@@ -553,6 +575,37 @@ function renderGeeAssets() {
     row.append(main, actions);
     list.appendChild(row);
   }
+  for (const asset of localShpAssets) {
+    const row = document.createElement("div");
+    row.className = "gee-rest-item";
+    const main = document.createElement("div");
+    main.className = "gee-rest-item-main";
+    const name = document.createElement("span");
+    name.className = "gee-rest-item-name";
+    name.textContent = asset.name;
+    name.title = asset.id;
+    const type = document.createElement("span");
+    type.className = "gee-rest-item-type";
+    type.textContent = "SHP·本地";
+    main.append(name, type);
+    const actions = document.createElement("div");
+    actions.className = "gee-rest-item-actions";
+    const scriptButton = document.createElement("button");
+    scriptButton.type = "button";
+    scriptButton.textContent = "注入脚本";
+    scriptButton.addEventListener("click", () => injectShpAssetIntoEditor(asset));
+    const chatButton = document.createElement("button");
+    chatButton.type = "button";
+    chatButton.textContent = "注入对话";
+    chatButton.addEventListener("click", () => injectShpAssetIntoPrompt(asset));
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.textContent = "删除";
+    deleteButton.addEventListener("click", () => deleteLocalShpAsset(asset.id));
+    actions.append(scriptButton, chatButton, deleteButton);
+    row.append(main, actions);
+    list.appendChild(row);
+  }
   elements.geeAssetMoreButton.classList.toggle("hidden", !geeAssetNextToken);
 }
 
@@ -562,6 +615,199 @@ function injectAssetIntoPrompt(assetId) {
   elements.prompt.value = current ? `${current}\n${marker}` : marker;
   elements.prompt.focus();
   setStatus("已把资产 ID 注入输入框");
+}
+
+// ---- Shapefile upload: cloud-first orchestration with a confirmed local
+// parse fallback. The cloud path uploads raw bytes through the editor page
+// bridge and imports the returned GCS URIs via the service worker; the local
+// path parses the set in-browser and persists it under shpAssetsV1.
+async function handleShpUpload() {
+  const input = elements.shpFileInput;
+  if (shpUploading) return;
+  const selected = [...(input.files || [])];
+  if (!selected.length) return;
+  shpUploading = true;
+  elements.shpUploadButton.disabled = true;
+  try {
+    setGeeColumnError("assets", "");
+    setGeeRestStatus("正在读取文件…");
+    const entries = await Promise.all(selected.map(async (file) => ({
+      name: file.name,
+      size: file.size,
+      buffer: await file.arrayBuffer()
+    })));
+    const validation = validateShapefileSet(entries);
+    if (!validation.ok) {
+      setGeeRestStatus("");
+      setGeeColumnError("assets", validation.error);
+      return;
+    }
+    const totalBytes = entries.reduce((sum, entry) => sum + entry.size, 0);
+    if (totalBytes > SHP_CLOUD_DIRECT_MAX_BYTES) {
+      await confirmLocalShpFallback(entries, validation.baseName, `文件总大小超过 ${SHP_CLOUD_DIRECT_MAX_BYTES / 1024 / 1024} MB 的云端直传上限`);
+      return;
+    }
+    const cloudReason = await getCloudUploadUnavailabilityReason();
+    if (cloudReason) {
+      await confirmLocalShpFallback(entries, validation.baseName, cloudReason);
+      return;
+    }
+    try {
+      await uploadShapefileToCloud(entries, validation.baseName);
+    } catch (error) {
+      if (error?.noLocalFallback) {
+        setGeeRestStatus("");
+        setGeeColumnError("assets", safeError(error));
+        return;
+      }
+      await confirmLocalShpFallback(entries, validation.baseName, `云端上传失败：${safeError(error)}`);
+    }
+  } catch (error) {
+    setGeeRestStatus("");
+    throw error;
+  } finally {
+    input.value = "";
+    shpUploading = false;
+    elements.shpUploadButton.disabled = false;
+  }
+}
+
+async function getCloudUploadUnavailabilityReason() {
+  if (!geeRestConfigured()) {
+    return "设置中尚未填写 Google OAuth 客户端 ID / Earth Engine Project ID";
+  }
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tabs[0]?.url?.startsWith("https://code.earthengine.google.com/")) {
+    return "当前活动标签页不是 Earth Engine Code Editor";
+  }
+  return "";
+}
+
+async function uploadShapefileToCloud(entries, baseName) {
+  setGeeRestStatus("正在获取上传地址…");
+  const urlResult = (await sendToEditor({ type: "SHP_GET_UPLOAD_URL" })).response;
+  if (!urlResult?.ok) throw new Error(urlResult?.error || "获取上传地址失败");
+  const uploadUrl = urlResult.result?.url;
+  if (!uploadUrl) throw new Error("获取上传地址失败：返回内容为空");
+  setGeeRestStatus("正在上传文件字节…");
+  const uploadResult = (await sendToEditor({
+    type: "SHP_UPLOAD_BLOB",
+    payload: {
+      uploadUrl,
+      files: entries.map(({ name, buffer }) => ({ name, buffer }))
+    }
+  })).response;
+  if (!uploadResult?.ok) throw new Error(uploadResult?.error || "上传文件字节失败");
+  const uris = uploadResult.result?.uris;
+  if (!uris?.length) throw new Error("上传成功但未返回任何资产 URI");
+  setGeeRestStatus("正在入库 Earth Engine…");
+  const importResult = await chrome.runtime.sendMessage({
+    type: "GEE_REST_IMPORT_TABLE",
+    payload: { assetName: baseName, uris, requestId: crypto.randomUUID() }
+  });
+  if (!importResult?.ok) {
+    if (importResult?.code === "ALREADY_EXISTS") {
+      const conflict = new Error(importResult.error || "资产名已存在，请换一个名称");
+      // Renaming is the only fix; a local copy would just mask the conflict.
+      conflict.noLocalFallback = true;
+      throw conflict;
+    }
+    throw new Error(importResult?.error || "入库 Earth Engine 失败");
+  }
+  setGeeRestStatus("");
+  setStatus(`已上传并入库 Earth Engine 资产：${importResult.assetName || baseName}`, "success");
+  await refreshGeeRest();
+}
+
+async function confirmLocalShpFallback(entries, baseName, reason) {
+  const confirmed = window.confirm(
+    `云端入库暂不可用（${reason}）。\n\n是否改为本地降级解析？shapefile 将在浏览器内解析为 GeoJSON 并保存为本地资产，可注入脚本与对话，但不会出现在 Earth Engine 云端资产列表中。`
+  );
+  if (!confirmed) {
+    setGeeRestStatus("");
+    setStatus("已取消 Shapefile 上传");
+    return;
+  }
+  await parseAndSaveLocalShapefile(entries, baseName);
+}
+
+async function parseAndSaveLocalShapefile(entries, baseName) {
+  setGeeRestStatus("正在解析 shapefile…");
+  const buffers = {};
+  for (const entry of entries) {
+    const extension = entry.name.slice(entry.name.lastIndexOf(".") + 1).toLowerCase();
+    buffers[extension] = entry.buffer;
+  }
+  const parsed = await parseShapefileToGeoJson(buffers, {
+    onProgress: ({ processed, total, done }) => {
+      if (!done) setGeeRestStatus(`正在解析…（${processed}/${total} 条记录）`);
+    }
+  });
+  const asset = {
+    id: `shp:${baseName}`,
+    name: baseName,
+    featureCount: parsed.featureCount,
+    bbox: parsed.bbox,
+    properties: parsed.properties,
+    geoJson: parsed.geoJson,
+    createdAt: Date.now()
+  };
+  const existing = await readShpAssets(chrome.storage.local);
+  const next = [asset, ...existing.filter((entry) => entry.id !== asset.id)];
+  try {
+    await writeShpAssets(chrome.storage.local, next);
+  } catch (error) {
+    if (isQuotaExceededError(error)) {
+      throw new Error("本地存储空间不足，请先在资产列表中删除旧的本地 SHP 资产后重试");
+    }
+    throw error;
+  }
+  localShpAssets = next;
+  setGeeRestStatus("");
+  setStatus(`本地资产已保存：${baseName}（${parsed.featureCount} 个要素）`, "success");
+  renderGeeAssets();
+}
+
+// Inserts `var <name> = ee.FeatureCollection(<json>);` at the editor cursor;
+// no expectedRevision on purpose so the snippet lands even if the script
+// changed since the last read.
+async function injectShpAssetIntoEditor(asset) {
+  try {
+    const { truncated, snippet } = buildFeatureCollectionSnippet(asset.name, asset.geoJson);
+    if (truncated) {
+      return showError("该本地资产过大，生成的代码片段超过注入上限，请先在 GIS 工具中裁剪数据");
+    }
+    const { response } = await sendToEditor({
+      type: "EDITOR_APPLY_CODE",
+      payload: { code: snippet, mode: "insert" }
+    });
+    if (!response?.ok) throw new Error(response?.error || "注入编辑器失败");
+    setStatus(`已把本地资产 ${asset.name} 注入编辑器`);
+  } catch (error) {
+    showError(error);
+  }
+}
+
+function injectShpAssetIntoPrompt(asset) {
+  const bboxText = Array.isArray(asset.bbox) ? asset.bbox.join(",") : "未知";
+  const fieldsText = asset.properties?.length ? asset.properties.join(",") : "无";
+  const marker = `资产: ${asset.id}（${asset.featureCount} 个要素，bbox [${bboxText}]，字段: ${fieldsText}）`;
+  const current = elements.prompt.value;
+  elements.prompt.value = current ? `${current}\n${marker}` : marker;
+  elements.prompt.focus();
+  setStatus("已把本地资产摘要注入输入框");
+}
+
+async function deleteLocalShpAsset(assetId) {
+  const next = localShpAssets.filter((entry) => entry.id !== assetId);
+  try {
+    await writeShpAssets(chrome.storage.local, next);
+    localShpAssets = next;
+    renderGeeAssets();
+    setStatus("已删除本地资产");
+  } catch (error) {
+    showError(error);
+  }
 }
 
 function renderGeeTasks() {
