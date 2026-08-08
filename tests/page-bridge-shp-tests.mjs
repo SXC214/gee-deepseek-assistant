@@ -58,12 +58,14 @@ function createBridgeHarness({ hostname = "code.earthengine.google.com", onFetch
   };
 }
 
-// XSRF fetch + geturl success: envelope stripping, credentials and XSRF header.
-let tokenRefreshes = 0;
+// geturl success: envelope stripping and credentials, but no x-xsrf-token
+// header and no /xsrf/refresh leg (geturl ignores the header; an initial
+// token-less refresh would always 403).
+let refreshCalls = 0;
 const successHarness = createBridgeHarness({
   onFetch(call) {
     if (call.url === "/xsrf/refresh") {
-      tokenRefreshes += 1;
+      refreshCalls += 1;
       return httpResponse(200, envelope({ xsrfToken: "TOK-1", xsrfTokenExpiresInMs: 600000 }));
     }
     if (call.url === "/assets/upload/geturl") {
@@ -76,40 +78,39 @@ const successHarness = createBridgeHarness({
 const firstUrl = await successHarness.request("SHP_GET_UPLOAD_URL");
 assert.equal(firstUrl.ok, true);
 assert.equal(firstUrl.result.url, "https://blobstore.example/session-1");
-assert.equal(tokenRefreshes, 1);
+assert.equal(refreshCalls, 0, "geturl never triggers an XSRF refresh");
+assert.equal(successHarness.calls.length, 1, "geturl is a single request");
 assert.equal(successHarness.calls[0].options.credentials, "include");
-assert.equal(successHarness.calls[1].options.credentials, "include");
-assert.equal(successHarness.calls[1].options.headers["x-xsrf-token"], "TOK-1");
+assert.equal(successHarness.calls[0].options.headers, undefined, "no x-xsrf-token header is sent");
 
-// Token cached inside its TTL: a second geturl must not refresh the XSRF token.
+// A second geturl stays a single header-less request as well.
 const secondUrl = await successHarness.request("SHP_GET_UPLOAD_URL");
 assert.equal(secondUrl.ok, true);
 assert.equal(secondUrl.result.url, "https://blobstore.example/session-1");
-assert.equal(tokenRefreshes, 1);
+assert.equal(refreshCalls, 0);
+assert.equal(successHarness.calls[1].options.headers, undefined);
 
 function createGeturlFailureHarness(status) {
-  let refreshes = 0;
   const harness = createBridgeHarness({
     onFetch(call) {
-      if (call.url === "/xsrf/refresh") {
-        refreshes += 1;
-        return httpResponse(200, envelope({ xsrfToken: `TOK-${refreshes}`, xsrfTokenExpiresInMs: 600000 }));
+      if (call.url === "/assets/upload/geturl") {
+        return httpResponse(status, envelope({ error: "denied" }));
       }
-      return httpResponse(status, envelope({ error: "denied" }));
+      throw new Error(`Unexpected fetch: ${call.url}`);
     }
   });
-  return { harness, refreshes: () => refreshes };
+  return { harness };
 }
 
-// 401 maps to the readable session error and drops the cached token.
+// 401 maps to the readable session error.
 {
-  const { harness, refreshes } = createGeturlFailureHarness(401);
+  const { harness } = createGeturlFailureHarness(401);
   const failed = await harness.request("SHP_GET_UPLOAD_URL");
   assert.equal(failed.ok, false);
   assert.match(failed.error, /页面会话无效或未登录/);
   assert.match(failed.error, /401/);
   await harness.request("SHP_GET_UPLOAD_URL");
-  assert.equal(refreshes(), 2);
+  assert.equal(harness.calls.length, 2, "each attempt retries geturl directly");
 }
 
 // 403 shares the same session-error semantics.
@@ -129,7 +130,7 @@ function createGeturlFailureHarness(status) {
   assert.match(failed.error, /HTTP error 500/);
 }
 
-// Network failure while fetching the XSRF token surfaces a Chinese error.
+// Network failure while requesting geturl surfaces a Chinese error.
 {
   const harness = createBridgeHarness({
     onFetch() { throw new TypeError("Failed to fetch"); }

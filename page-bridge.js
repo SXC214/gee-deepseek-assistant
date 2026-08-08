@@ -6,9 +6,6 @@
   const RESPONSE = "GEE_AI_BRIDGE_RESPONSE";
   const EDITOR_HOSTNAME = "code.earthengine.google.com";
 
-  // In-memory XSRF cache, mirroring the page's own behaviour (TTL × 0.9).
-  let xsrfCache = null; // { token, expiresAt }
-
   window.addEventListener("message", async (event) => {
     if (event.source !== window) return;
     const message = event.data;
@@ -151,36 +148,18 @@
     }
   }
 
-  async function getXsrfToken() {
-    if (xsrfCache && Date.now() < xsrfCache.expiresAt) return xsrfCache.token;
-    const data = await fetchPageJson("/xsrf/refresh", { credentials: "include" });
-    if (!data?.xsrfToken) {
-      throw new Error("页面会话令牌缺失，请在 Code Editor 页面刷新后重试");
-    }
-    const ttl = Number(data.xsrfTokenExpiresInMs);
-    xsrfCache = Number.isFinite(ttl) && ttl > 0
-      ? { token: data.xsrfToken, expiresAt: Date.now() + Math.floor(ttl * 0.9) }
-      : { token: data.xsrfToken, expiresAt: 0 };
-    return xsrfCache.token;
-  }
-
   async function getShapefileUploadUrl() {
     assertEditorOrigin();
-    const token = await getXsrfToken();
-    try {
-      const data = await fetchPageJson("/assets/upload/geturl", {
-        credentials: "include",
-        headers: { "x-xsrf-token": token }
-      });
-      if (!data?.url) {
-        throw new Error("服务端未返回上传地址，请在 Code Editor 页面刷新后重试");
-      }
-      return { url: data.url };
-    } catch (error) {
-      // A rejected session invalidates the cached token as well.
-      if (error.status === 401 || error.status === 403) xsrfCache = null;
-      throw error;
+    // Verified in the browser: geturl does not validate the x-xsrf-token
+    // header (a header-less request returns 200 with a url), while an
+    // initial /xsrf/refresh without a token always answers 403 "Invalid
+    // XSRF token". geturl is therefore requested without any XSRF token;
+    // token acquisition must never block the upload-url leg.
+    const data = await fetchPageJson("/assets/upload/geturl", { credentials: "include" });
+    if (!data?.url) {
+      throw new Error("服务端未返回上传地址，请在 Code Editor 页面刷新后重试");
     }
+    return { url: data.url };
   }
 
   async function uploadShapefileBytes(payload) {
