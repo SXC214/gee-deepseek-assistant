@@ -430,6 +430,42 @@ assert.equal(firstByteFetches, 2, "first-byte timeout is retryable while nothing
 assert.match(firstBytePosted.find((message) => message.type === "ERROR").error, /超时/);
 workerModule.__timings.streamFirstByteTimeoutMs = 30000;
 
+// ---- Non-2xx with a stalled error body: the timeout budget still ends it
+// instead of hanging forever on response.text().
+workerModule.__timings.streamFirstByteTimeoutMs = 30;
+let errBodyFetches = 0;
+globalThis.fetch = () => {
+  errBodyFetches += 1;
+  return {
+    ok: false,
+    status: 500,
+    headers: { get: () => null },
+    text: () => new Promise(() => {})
+  };
+};
+const errBodyPosted = connectStreamPort("stream-error-body-stall");
+await waitUntil(() => errBodyPosted.some((message) => message.type === "ERROR"), 300);
+assert.match(errBodyPosted.find((message) => message.type === "ERROR").error, /超时/, "the timeout covers the error body read");
+assert.equal(errBodyFetches, 2, "a stalled error body times out like a silent stream and retries once");
+workerModule.__timings.streamFirstByteTimeoutMs = 30000;
+
+// A manual stop also interrupts a stalled error body read.
+let errBodyAbortSignal = null;
+globalThis.fetch = (_url, options) => {
+  errBodyAbortSignal = options.signal;
+  return {
+    ok: false,
+    status: 500,
+    headers: { get: () => null },
+    text: () => new Promise(() => {})
+  };
+};
+const errBodyAbortPosted = connectStreamPort("stream-error-body-abort");
+await waitUntil(() => Boolean(errBodyAbortSignal), 300);
+await dispatch({ type: "AI_ABORT", requestId: "stream-error-body-abort" });
+await waitUntil(() => errBodyAbortPosted.some((message) => message.type === "ERROR"), 300);
+assert.equal(errBodyAbortPosted.find((message) => message.type === "ERROR").error, "请求已停止", "manual stop interrupts a stalled error body read");
+
 // ---- Manual stop is never retried.
 let manualStopFetches = 0;
 let manualStopSignal = null;

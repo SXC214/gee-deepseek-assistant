@@ -510,11 +510,15 @@ async function streamChat(payload, port) {
         });
 
         if (!response.ok) {
+          // The error body read joins the attempt's abort/timeout umbrella:
+          // a stalled body cannot hang the request past the timeout budget or
+          // a manual stop, mirroring the streaming loop below.
+          armEventTimeout(__timings.streamFirstByteTimeoutMs);
           let httpError = new Error(`模型流式请求失败（HTTP ${response.status}）`);
           try {
-            await consumeSseResponse(response, {});
+            await consumeSseResponse(response, { signal: attemptController.signal });
           } catch (detailError) {
-            httpError = detailError;
+            httpError = timedOut ? createStreamTimeoutError() : detailError;
           }
           if (RETRYABLE_STATUSES.has(response.status)) markTransient(httpError);
           throw httpError;
