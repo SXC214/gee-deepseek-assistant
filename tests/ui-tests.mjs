@@ -61,6 +61,14 @@ assert.match(script, /function renderInitializeRetry\(error\)/);
 assert.match(script, /async function retryInitialize\(\)/);
 assert.match(script, /重试初始化/);
 assert.match(script, /if \(eventsBound\) return/);
+// ISS-007 regression guard: the eventsBound idempotency guard (and any module
+// state read by the top-level initialize/bindEvents path) must be initialized
+// before the top-level initialize() call, otherwise first load hits a TDZ error.
+assert.ok(script.indexOf("let eventsBound = false") > -1, "eventsBound guard must exist");
+assert.ok(
+  script.indexOf("let eventsBound = false") < script.indexOf("initialize().catch(handleInitializeFailure)"),
+  "eventsBound must be initialized before the top-level initialize() call (ISS-007)"
+);
 assert.match(styles, /\.init-retry-notice\s*\{/);
 assert.match(orchestratorScript, /runtime\.connect\(\{ name: "AI_CHAT_STREAM" \}\)/);
 assert.match(script, /兼容模式不支持实时思考/);

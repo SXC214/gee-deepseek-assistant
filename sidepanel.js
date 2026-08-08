@@ -57,6 +57,7 @@ let initializing = false;
 let initRetryButton = null;
 let followConversation = true;
 let consoleReadAttempted = false;
+let eventsBound = false;
 
 const orchestrator = createOrchestrator({
   runtime: chrome.runtime,
@@ -166,7 +167,6 @@ async function retryInitialize() {
   }
 }
 
-let eventsBound = false;
 function bindEvents() {
   if (eventsBound) return;
   eventsBound = true;

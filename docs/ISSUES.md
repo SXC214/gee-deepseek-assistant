@@ -74,3 +74,12 @@
 - 控制台报错：无（静默读取不到内容）
 - 所在层：内容脚本层（content-script.js）
 - 状态：已修复
+
+### ISS-007 侧栏首次加载 eventsBound TDZ 错误导致全界面失效
+- 编号：ISS-007
+- 标题：侧栏首次加载 eventsBound TDZ 错误导致全界面失效
+- 现象：每次新开侧栏必现 `Cannot access 'eventsBound' before initialization`，全界面事件绑定失效（所有按钮/表单无响应），用户必须点击「重试初始化」才能恢复。
+- 复现步骤：打开扩展侧栏即可必现（无需任何额外操作）。
+- 控制台报错：`Uncaught ReferenceError: Cannot access 'eventsBound' before initialization`
+- 所在层：UI 层（sidepanel.js 顶层执行顺序：顶层 `initialize()` 调用早于 `let eventsBound` 声明，触发暂时性死区 TDZ）
+- 状态：已修复
