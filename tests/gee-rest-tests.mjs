@@ -53,7 +53,8 @@ function mockResponse(status, body = "") {
   assert.equal(state.length >= OAUTH_STATE_MIN_LENGTH, true);
   assert.notEqual(state, createOAuthState());
   assert.equal(verifyOAuthState(state, state), true);
-  assert.equal(verifyOAuthState(state, `${state.slice(0, -1)}0`), false, "one flipped nibble fails");
+  const flipped = `${state.slice(0, -1)}${state.at(-1) === "0" ? "1" : "0"}`;
+  assert.equal(verifyOAuthState(state, flipped), false, "one flipped nibble fails");
   assert.equal(verifyOAuthState(state, ""), false, "missing callback state fails");
   assert.equal(verifyOAuthState(state, `${state}00`), false, "length mismatch fails");
   assert.equal(verifyOAuthState("short", "short"), false, "low-entropy state is never accepted");
