@@ -297,6 +297,48 @@ assert.match(chatTimeoutResult.error, /超时/);
 assert.equal(chatTimeoutFetches, 1, "chat never auto-retries billed POSTs");
 workerModule.__timings.chatTimeoutMs = 60000;
 
+// Headers arrive but the body never ends: the total timeout must still fire.
+workerModule.__timings.chatTimeoutMs = 40;
+let stalledBodyFetches = 0;
+globalThis.fetch = () => {
+  stalledBodyFetches += 1;
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    text: () => new Promise(() => {})
+  };
+};
+const stalledChat = await dispatch({
+  type: "AI_CHAT",
+  payload: { requestId: "chat-body-stall", purpose: "direct", messages: [{ role: "user", content: "stalled body" }] }
+});
+assert.equal(stalledChat.ok, false);
+assert.match(stalledChat.error, /超时/, "the timeout also covers the response body");
+assert.equal(stalledBodyFetches, 1);
+workerModule.__timings.chatTimeoutMs = 60000;
+
+// A stalled body can also be interrupted by a manual stop.
+let stalledAbortSignal = null;
+globalThis.fetch = (_url, options) => {
+  stalledAbortSignal = options.signal;
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    text: () => new Promise(() => {})
+  };
+};
+const stalledAbortRequest = dispatch({
+  type: "AI_CHAT",
+  payload: { requestId: "chat-body-abort", purpose: "direct", messages: [{ role: "user", content: "abort the body" }] }
+});
+await waitUntil(() => Boolean(stalledAbortSignal), 300);
+await dispatch({ type: "AI_ABORT", requestId: "chat-body-abort" });
+const stalledAbortResult = await stalledAbortRequest;
+assert.equal(stalledAbortResult.ok, false);
+assert.equal(stalledAbortResult.error, "请求已停止", "manual stop interrupts a stalled body read");
+
 // Back to the official V4 endpoint for the streaming tests below.
 localData.settings = {
   ...localData.settings,

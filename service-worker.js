@@ -335,7 +335,6 @@ async function runGeeRestCall(kind, payload = {}) {
 async function chat(payload) {
   const requestId = String(payload.requestId || crypto.randomUUID());
   const controller = registerRequest(requestId);
-  let deadlineHit = false;
 
   try {
     const [{ settings }, apiKey] = await Promise.all([
@@ -354,14 +353,11 @@ async function chat(payload) {
     });
     if (body.stream) throw new Error("官方 DeepSeek V4 请求必须使用流式连接");
 
-    // Billed POST: never auto-retry, but enforce a hard total timeout that
-    // also covers reading the response body.
-    const deadline = setTimeout(() => {
-      deadlineHit = true;
-      controller.abort();
-    }, __timings.chatTimeoutMs);
+    // Billed POST: never auto-retry. The kernel's `consume` option reads the
+    // body inside the same timeout/abort umbrella, so the hard total timeout
+    // also covers a stalled response body.
     try {
-      const response = await fetchWithPolicy(chatCompletionsUrl(merged.baseUrl), {
+      const consumed = await fetchWithPolicy(chatCompletionsUrl(merged.baseUrl), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -370,19 +366,23 @@ async function chat(payload) {
         body: JSON.stringify(body),
         signal: controller.signal,
         timeoutMs: __timings.chatTimeoutMs,
-        retryable: false
+        retryable: false,
+        consume: async (response) => ({
+          ok: response.ok,
+          status: response.status,
+          raw: await response.text()
+        })
       });
 
-      const raw = await response.text();
       let data;
       try {
-        data = JSON.parse(raw);
+        data = JSON.parse(consumed.raw);
       } catch {
-        throw new Error(`模型接口返回了非 JSON 内容（HTTP ${response.status}）`);
+        throw new Error(`模型接口返回了非 JSON 内容（HTTP ${consumed.status}）`);
       }
 
-      if (!response.ok) {
-        const detail = data?.error?.message || data?.message || `HTTP ${response.status}`;
+      if (!consumed.ok) {
+        const detail = data?.error?.message || data?.message || `HTTP ${consumed.status}`;
         throw new Error(`模型请求失败：${detail}`);
       }
 
@@ -401,12 +401,10 @@ async function chat(payload) {
         finishReason: data?.choices?.[0]?.finish_reason || null
       };
     } catch (error) {
-      if (deadlineHit || error?.name === "TimeoutError") {
+      if (error?.name === "TimeoutError") {
         throw new Error("模型请求超时，请稍后重试");
       }
       throw error;
-    } finally {
-      clearTimeout(deadline);
     }
   } finally {
     if (activeRequests.get(requestId) === controller) activeRequests.delete(requestId);
@@ -797,17 +795,24 @@ async function fetchText(url, externalSignal) {
   if (target.hostname === "developers.google.com") target.searchParams.set("hl", "en");
 
   // Idempotent GET: retry with a generous backoff so bursts do not trip
-  // Google's stricter rate limits. External aborts are never retried.
-  const response = await fetchWithPolicy(target.href, {
+  // Google's stricter rate limits. External aborts are never retried. The
+  // body is consumed inside the kernel so a stalled page cannot hang past
+  // the timeout or a manual stop.
+  const page = await fetchWithPolicy(target.href, {
     headers: { "Accept": "text/html,application/xhtml+xml" },
     signal: externalSignal,
     timeoutMs: __timings.pageTimeoutMs,
     retryable: true,
     maxRetries: __timings.pageMaxRetries,
-    backoffMs: __timings.pageBackoffMs
+    backoffMs: __timings.pageBackoffMs,
+    consume: async (response) => ({
+      ok: response.ok,
+      status: response.status,
+      html: await response.text()
+    })
   });
-  if (!response.ok) throw new Error(`官方页面请求失败（HTTP ${response.status}）`);
-  return response.text();
+  if (!page.ok) throw new Error(`官方页面请求失败（HTTP ${page.status}）`);
+  return page.html;
 }
 
 // Lets Node tests simulate a service worker restart for the cache layers.

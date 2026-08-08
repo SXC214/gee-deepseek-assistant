@@ -15,6 +15,16 @@ function mockResponse(status, { headers = {}, text = "" } = {}) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function stalledBodyResponse() {
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    // Headers arrived fine, but the body never completes.
+    text: () => new Promise(() => {})
+  };
+}
+
 // --- Success: fetch options forwarded, response returned untouched.
 {
   let captured;
@@ -49,6 +59,62 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   assert.equal(error.name, "TimeoutError");
   assert.match(error.message, /请求超时/);
   assert.equal(calls, 1, "timeout is never retried");
+}
+
+// --- Body consumption: headers arrive but the body never ends -> TimeoutError.
+{
+  globalThis.fetch = async () => stalledBodyResponse();
+  const error = await fetchWithPolicy("https://stalled.example.com", {
+    timeoutMs: 30,
+    consume: (response) => response.text()
+  }).then(() => null, (failure) => failure);
+  assert.ok(error, "a stalled body must fail instead of hanging forever");
+  assert.equal(error.name, "TimeoutError");
+  assert.match(error.message, /请求超时/);
+}
+
+// --- Body consumption: an external abort interrupts a stalled body.
+{
+  const controller = new AbortController();
+  globalThis.fetch = async () => stalledBodyResponse();
+  const started = Date.now();
+  const pending = fetchWithPolicy("https://stalled.example.com", {
+    timeoutMs: 60000,
+    signal: controller.signal,
+    consume: (response) => response.text()
+  });
+  setTimeout(() => controller.abort(), 10);
+  const error = await pending.then(() => null, (failure) => failure);
+  assert.equal(error?.name, "AbortError");
+  assert.ok(Date.now() - started < 2000, "abort interrupts the body read promptly");
+}
+
+// --- consume resolves the consumed value; retryable statuses are not
+// consumed before a retry, only the final response is.
+{
+  let calls = 0;
+  let consumed = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return {
+      ok: calls > 1,
+      status: calls === 1 ? 503 : 200,
+      headers: { get: () => null },
+      text: async () => {
+        consumed += 1;
+        return `body-${calls}`;
+      }
+    };
+  };
+  const value = await fetchWithPolicy("https://consume.example.com", {
+    retryable: true,
+    maxRetries: 2,
+    backoffMs: 2,
+    consume: (response) => response.text()
+  });
+  assert.equal(value, "body-2", "consume return value replaces the Response");
+  assert.equal(calls, 2);
+  assert.equal(consumed, 1, "retryable statuses are never consumed before a retry");
 }
 
 // --- Retry: 503 then success, exactly two attempts.
