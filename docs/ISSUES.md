@@ -122,6 +122,15 @@
 - 调研结论与取舍：公开 Earth Engine REST 接口不支持字节直传入库（无公开 multipart 上传端点），Code Editor 页面的字节上传通道（`geturl` + `_ah/upload`）为会话鉴权且未文档化；因此方案取舍为——字节暂存段借用页面会话（与脚本注入同一 MAIN world 桥接机制），入库段调用公开标准 `table:import` REST（扩展自有 `earthengine` 范围 Bearer 令牌），形成「云端主路径 + 本地降级」双路径。
 - 风险与边界：暂存通道属未文档化接口，可能随 Google 变更失效，失效时功能自动引导降级；用户已明确批准修订 README 安全边界（原「绝不复用网页令牌/Cookie/XSRF」）：扩展不存储、不导出、不读取任何 Cookie/XSRF 凭证明文，仅在页面内发起带凭证请求。上限：云端直传整套 8MB；本地解析整套 32MB、要素 50000、注入片段 1MB；仅 2D 点/线/面（Z 降维）、dBase III 属性；`.prj` 非 EPSG:4326 拒绝（不重投影）。详见 README「上传 Shapefile」「安全边界」「已知限制」各节。
 
+### ISS-012 401 整链重试复用同一 requestId（权衡接受，暂不修复）
+- 编号：ISS-012
+- 标题：GEE REST 401 重新授权后的整链重试复用原 requestId
+- 现象：`runGeeRestCall` 在 401 后重新授权并重试整条调用链（import 链含 table:import + LRO 轮询），两次尝试共用同一 requestId/abort 簿记；极端窗口内（第一次尝试进行中触发 abort 且恰逢 401 重试）abort 语义可能与重试链交叠。
+- 复现步骤：构造首次 GEE REST 调用返回 401 触发重新授权重试，并在同一 requestId 上同时发起 abort。
+- 控制台报错：无
+- 所在层：服务层（service-worker.js runGeeRestCall / geeRestImportRequest）
+- 状态：不修复（v0.4.x 复审建议项 4：触发条件苛刻且现有测试已背书整链重试语义，权衡后保留现状；如后续出现实际 abort 竞态报告再引入重试级 requestId 去重）
+
 ---
 
 ## 审核闭环记录
