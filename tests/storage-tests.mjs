@@ -6,6 +6,7 @@ import {
   MESSAGE_QUEUE_KEY,
   candidateMetaOnly,
   halveChatHistory,
+  isQuotaExceededError,
   readActivePlan,
   readChatHistory,
   readCodeCandidate,
@@ -38,11 +39,15 @@ function createFakeStorage(initial = {}) {
   const data = structuredClone(initial);
   const writes = [];
   let rejectSet = () => false;
+  let rejectionError = null;
   return {
     data,
     writes,
     setRejector(fn) {
       rejectSet = fn;
+    },
+    setError(error) {
+      rejectionError = error;
     },
     async get(key) {
       if (typeof key === "string") return { [key]: structuredClone(data[key]) };
@@ -51,7 +56,7 @@ function createFakeStorage(initial = {}) {
     async set(values) {
       writes.push(values);
       if (rejectSet(values, data)) {
-        throw new DOMException("QUOTA_BYTES quota exceeded", "QuotaExceededError");
+        throw rejectionError || new DOMException("QUOTA_BYTES quota exceeded", "QuotaExceededError");
       }
       Object.assign(data, structuredClone(values));
     },
@@ -169,6 +174,57 @@ function createFakeStorage(initial = {}) {
   assert.equal(outcome.finalValue, null);
   assert.ok(outcome.evictions.includes("chat-history-halved"));
   assert.ok(outcome.evictions.includes("candidate-meta-only"));
+}
+
+// isQuotaExceededError recognizes both chrome.storage quota failure shapes and
+// rejects everything else.
+{
+  assert.equal(isQuotaExceededError(new DOMException("QUOTA_BYTES quota exceeded", "QuotaExceededError")), true);
+  assert.equal(isQuotaExceededError(new Error("QUOTA_BYTES quota exceeded")), true);
+  assert.equal(isQuotaExceededError(new Error("MAX_QUOTA_BYTES per-item quota exceeded")), true);
+  assert.equal(isQuotaExceededError(new Error("Failed to execute 'set'")), false);
+  assert.equal(isQuotaExceededError(new Error("Extension context invalidated.")), false);
+  assert.equal(isQuotaExceededError(new TypeError("Converting circular structure to JSON")), false);
+  assert.equal(isQuotaExceededError(null), false);
+  assert.equal(isQuotaExceededError("quota"), false);
+}
+
+// Non-quota failures propagate untouched and never trigger eviction (M4).
+{
+  for (const failure of [
+    new Error("Extension context invalidated."),
+    new TypeError("An object could not be cloned."),
+    new DOMException("The user aborted a request.", "AbortError")
+  ]) {
+    const storage = createFakeStorage({ [CHAT]: [1, 2, 3, 4], [CANDIDATE]: { code: "big", baseCode: "" } });
+    storage.setRejector(() => true);
+    storage.setError(failure);
+    const error = await setWithQuotaEviction(storage, {
+      targetKey: CHAT,
+      targetValue: [5, 6, 7, 8],
+      chatKey: CHAT,
+      candidateKey: CANDIDATE
+    }).then(() => null, (caught) => caught);
+    assert.equal(error, failure, "the original error object reaches the caller");
+    assert.deepEqual(storage.data[CHAT], [1, 2, 3, 4], "chat history is untouched on non-quota failure");
+    assert.deepEqual(storage.data[CANDIDATE], { code: "big", baseCode: "" }, "candidate survives non-quota failure");
+    assert.equal(storage.writes.length, 1, "no eviction retry happens for non-quota failures");
+  }
+}
+
+// Quota failures expressed as a plain message still trigger the eviction chain.
+{
+  const storage = createFakeStorage();
+  storage.setRejector((values) => Array.isArray(values[CHAT]) && values[CHAT].length > 1);
+  storage.setError(new Error("MAX_QUOTA_BYTES per-item quota exceeded"));
+  const outcome = await setWithQuotaEviction(storage, {
+    targetKey: CHAT,
+    targetValue: [1, 2, 3, 4],
+    chatKey: CHAT,
+    candidateKey: CANDIDATE
+  });
+  assert.equal(outcome.persisted, true, "message-based quota errors still evict");
+  assert.deepEqual(storage.data[CHAT], [4]);
 }
 
 // Storage keys keep the exact names the sidepanel used before the merge.
