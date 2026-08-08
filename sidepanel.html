@@ -33,6 +33,17 @@
         </div>
         <form id="settingsForm">
           <label>
+            模型服务商
+            <select id="providerPreset" name="providerPreset">
+              <option value="deepseek">DeepSeek 官方</option>
+              <option value="zhipu">智谱 GLM</option>
+              <option value="moonshot">Moonshot Kimi</option>
+              <option value="qwen">阿里通义 Qwen</option>
+              <option value="custom">自定义</option>
+            </select>
+          </label>
+          <p class="hint">选择服务商预设会自动填充下方 API 地址与模型名称，两个字段仍可自由修改；「自定义」不改动现有内容。</p>
+          <label>
             API 地址
             <input id="baseUrl" name="baseUrl" type="url" placeholder="https://api.deepseek.com" required>
           </label>

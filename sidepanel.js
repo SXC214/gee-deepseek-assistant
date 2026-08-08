@@ -8,6 +8,7 @@ import { createConsoleContextSection, getConsoleUiState, normalizeConsoleRead } 
 import { alignConversationToUser } from "./lib/conversation.js";
 import { createLineDiff } from "./lib/diff.js";
 import { createOrchestrator } from "./lib/orchestrator.js";
+import { CUSTOM_PROVIDER_ID, findProviderPreset, matchProviderPreset } from "./lib/provider-presets.js";
 import {
   ACTIVE_PLAN_KEY,
   CHAT_HISTORY_KEY,
@@ -186,6 +187,7 @@ function bindEvents() {
   elements.thinkingEnabled.addEventListener("change", syncThinkingControls);
   elements.baseUrl.addEventListener("input", updateProviderCapabilityHint);
   elements.model.addEventListener("input", updateProviderCapabilityHint);
+  elements.providerPreset.addEventListener("change", applyProviderPreset);
   elements.readButton.addEventListener("click", async () => {
     await readEditor();
   });
@@ -277,10 +279,24 @@ function syncThinkingControls() {
 }
 
 function updateProviderCapabilityHint() {
+  // 预设下拉框始终是 baseUrl / model 两个字段的镜像：手动改成与预设
+  // 不一致的值时自动回落到「自定义」，避免下拉状态和字段脱节。
+  const matched = matchProviderPreset(elements.baseUrl.value, elements.model.value);
+  elements.providerPreset.value = matched || CUSTOM_PROVIDER_ID;
   const supported = isOfficialDeepSeekV4(elements.baseUrl.value, elements.model.value);
   elements.providerCapabilityHint.textContent = supported
     ? "当前接口支持 DeepSeek V4 实时思考和 High / Max 强度。"
     : "兼容模式不支持实时思考；将使用普通非流式调用，不发送 DeepSeek 专用参数。";
+}
+
+// 服务商预设只填充 API 地址与默认模型名；字段保持可编辑，
+// 「自定义」（无命中预设）不改动任何现有内容。
+function applyProviderPreset() {
+  const preset = findProviderPreset(elements.providerPreset.value);
+  if (!preset) return;
+  elements.baseUrl.value = preset.baseUrl;
+  elements.model.value = preset.defaultModel;
+  updateProviderCapabilityHint();
 }
 
 async function saveToolPreferences() {

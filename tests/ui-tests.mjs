@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { CUSTOM_PROVIDER_ID, PROVIDER_PRESETS } from "../lib/provider-presets.js";
 
 const html = fs.readFileSync(new URL("../sidepanel.html", import.meta.url), "utf8");
 const script = fs.readFileSync(new URL("../sidepanel.js", import.meta.url), "utf8");
@@ -180,6 +181,30 @@ assert.match(orchestratorScript, /directConversation = alignConversationToUser\(
 assert.match(script, /orchestrator\.setDirectConversation\(alignConversationToUser\(/);
 assert.match(script, /elements\.compatibleStreaming\.checked = currentSettings\.compatibleStreaming === true/);
 assert.match(script, /compatibleStreaming: elements\.compatibleStreaming\.checked/);
+// Model provider presets: the dropdown mirrors lib/provider-presets.js and
+// only pre-fills baseUrl / model; fields stay editable and custom never
+// touches existing values. Presets must not leak into request construction.
+assert.match(html, /<select id="providerPreset" name="providerPreset">/);
+assert.ok(html.indexOf('id="providerPreset"') < html.indexOf('id="baseUrl"'), "provider dropdown must precede the API address field");
+const providerSelectHtml = html.match(/<select id="providerPreset"[\s\S]*?<\/select>/)[0];
+const providerOptions = [...providerSelectHtml.matchAll(/<option value="([^"]+)">([^<]+)<\/option>/g)]
+  .map((match) => ({ value: match[1], label: match[2] }));
+assert.deepEqual(
+  providerOptions.map((option) => option.value),
+  [...PROVIDER_PRESETS.map((preset) => preset.id), CUSTOM_PROVIDER_ID],
+  "provider dropdown options must mirror the preset table plus the custom entry"
+);
+for (const preset of PROVIDER_PRESETS) {
+  const option = providerOptions.find((entry) => entry.value === preset.id);
+  assert.ok(option, `option for preset ${preset.id} must exist`);
+  assert.equal(option.label, preset.label, `option label for ${preset.id} must match the preset label`);
+}
+assert.equal(providerOptions.at(-1).label, "自定义");
+assert.match(script, /import \{ CUSTOM_PROVIDER_ID, findProviderPreset, matchProviderPreset \} from "\.\/lib\/provider-presets\.js"/);
+assert.match(script, /elements\.providerPreset\.addEventListener\("change", applyProviderPreset\)/);
+assert.match(script, /function applyProviderPreset\(\) \{\s+const preset = findProviderPreset\(elements\.providerPreset\.value\);\s+if \(!preset\) return;\s+elements\.baseUrl\.value = preset\.baseUrl;\s+elements\.model\.value = preset\.defaultModel;/);
+assert.match(script, /elements\.providerPreset\.value = matched \|\| CUSTOM_PROVIDER_ID/);
+assert.doesNotMatch(script, /providerPreset: elements\.providerPreset\.value/, "provider choice must never be persisted in settings");
 // GEE REST direct connection: settings input, redirect URI helper and panel.
 assert.match(html, /id="geeClientId"/);
 assert.match(html, /id="geeRedirectUri"/);
