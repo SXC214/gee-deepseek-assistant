@@ -159,6 +159,37 @@ function lastAiChat(calls) {
   assert.equal(conversation[0].role, "user", "alignConversationToUser keeps a user turn first");
 }
 
+// M3: the final slice(-6) can cut an already-aligned window mid-exchange; the
+// sent window must be re-aligned so it never starts with an assistant turn.
+// 11 stored messages (the shape left after aligning an assistant-first 12
+// window) make slice(-6) start with an assistant answer.
+{
+  const prior = [];
+  for (let index = 0; index < 5; index += 1) {
+    prior.push({ role: "user", content: `问题 ${index}` }, { role: "assistant", content: `回答 ${index}` });
+  }
+  prior.push({ role: "user", content: "问题 5" });
+  assert.equal(prior.length, 11);
+  assert.equal(prior.slice(-6)[0].role, "assistant", "precondition: last 6 start assistant-first");
+
+  const { calls, orchestrator } = createHarness();
+  orchestrator.setDirectConversation(prior);
+  await orchestrator.executePrompt("重新对齐", false);
+
+  const payload = lastAiChat(calls);
+  // system + re-aligned window (dropping the orphan assistant answer) + user
+  assert.equal(payload.messages.length, 7);
+  assert.equal(payload.messages[1].role, "user", "sent window must start with a user turn");
+  assert.deepEqual(payload.messages[1], { role: "user", content: "问题 3" });
+  assert.ok(
+    payload.messages.slice(1, -1).every((message, index, window) => {
+      const expected = index % 2 === 0 ? "user" : "assistant";
+      return message.role === expected && (window.length === 5);
+    }),
+    "re-aligned window keeps complete user/assistant turns"
+  );
+}
+
 // compatibleStreaming opt-in: a compatible endpoint routes through the
 // streaming Port instead of the AI_CHAT one-shot message (M1).
 {
