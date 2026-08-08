@@ -1219,6 +1219,27 @@ function importLro(done, extra = {}) {
   assert.equal(importCalls[1].options.method, undefined, "polling uses GET");
 }
 
+// .cpg-declared charset rides the SW route straight into the manifest.
+{
+  const charsetCalls = [];
+  globalThis.fetch = async (url, options) => {
+    charsetCalls.push({ url: String(url), options });
+    if (options.method === "POST") return importLro(false);
+    return importLro(true, { response: { name: "projects/gee proj/assets/gbk", type: "TABLE" } });
+  };
+  const charsetOk = await dispatch({
+    type: "GEE_REST_IMPORT_TABLE",
+    payload: { requestId: "gee-import-charset", assetName: "gbk", uris: ["gs://bucket/gbk.shp"], charset: "GBK" }
+  });
+  assert.equal(charsetOk.ok, true);
+  const charsetManifest = JSON.parse(charsetCalls[0].options.body);
+  assert.deepEqual(
+    charsetManifest.tableManifest.sources,
+    [{ charset: "GBK", maxErrorMeters: 1, uris: ["gs://bucket/gbk.shp"] }],
+    "payload.charset is forwarded into the table:import manifest"
+  );
+}
+
 // 409 conflict: structured, UI-ready error instead of a thrown message.
 {
   globalThis.fetch = async () => geeJson(409, { error: { message: "already exists", status: "ALREADY_EXISTS" } });

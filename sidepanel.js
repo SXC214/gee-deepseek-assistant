@@ -705,9 +705,18 @@ async function uploadShapefileToCloud(entries, baseName) {
   const shpFile = uploadedFiles.find((file) => String(file?.name || "").toLowerCase().endsWith(".shp"));
   if (!shpFile?.uri) throw new Error("上传结果中缺少 .shp 文件的资产 URI");
   setGeeRestStatus("正在入库 Earth Engine…");
+  const importPayload = { assetName: baseName, uris: [shpFile.uri], requestId: crypto.randomUUID() };
+  // A .cpg sidecar declares the attribute-table encoding; pass it through so
+  // GBK/GB2312 tables are not silently ingested as UTF-8. A missing .cpg
+  // keeps the importTable default, an empty one falls back to "UTF-8".
+  const cpgEntry = entries.find((entry) => String(entry?.name || "").toLowerCase().endsWith(".cpg"));
+  if (cpgEntry) {
+    const declared = new TextDecoder("utf-8", { fatal: false }).decode(cpgEntry.buffer || new ArrayBuffer(0)).trim();
+    importPayload.charset = declared || "UTF-8";
+  }
   const importResult = await chrome.runtime.sendMessage({
     type: "GEE_REST_IMPORT_TABLE",
-    payload: { assetName: baseName, uris: [shpFile.uri], requestId: crypto.randomUUID() }
+    payload: importPayload
   });
   if (!importResult?.ok) {
     if (importResult?.code === "ALREADY_EXISTS") {
