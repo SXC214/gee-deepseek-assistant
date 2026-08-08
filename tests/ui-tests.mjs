@@ -106,6 +106,17 @@ assert.match(script, /setScrollToLatestVisibility/);
 assert.match(orchestratorScript, /function describePlanTurnError\(error, stage\)/);
 assert.match(orchestratorScript, /模型最终计划未通过结构校验/);
 assert.match(orchestratorScript, /setRequestErrorStatus\(error, \{/);
+// ISS-008 regression guard: both planning system prompts forbid premature
+// fenced code, and the plan turn degrades gracefully (never crashes, never
+// applies code) when a model still returns one.
+assert.match(orchestratorScript, /规划与澄清问题阶段严禁输出任何可执行代码或围栏代码块/);
+assert.match(orchestratorScript, /代码只能在用户确认计划、进入执行\/生成阶段后产出/);
+assert.match(orchestratorScript, /规划、调研与澄清问题阶段严禁输出任何可执行代码或围栏代码块/);
+assert.match(orchestratorScript, /const prematureCode = containsFencedCodeBlock\(rawContent\)/);
+assert.match(orchestratorScript, /parsePlanResponse\(stripFencedCodeBlocks\(rawContent\)\)/);
+assert.match(orchestratorScript, /premature\.prematurePlanCode = true/);
+assert.match(orchestratorScript, /模型在计划阶段提前返回了代码，已忽略未应用/);
+assert.match(orchestratorScript, /if \(error\?\.prematurePlanCode\)/);
 assert.match(styles, /\.status-error\s*\{[\s\S]*?white-space:\s*normal/);
 assert.match(styles, /html,[\s\S]*?body\s*\{[\s\S]*?overflow:\s*hidden/);
 assert.match(styles, /\.conversation\s*\{[\s\S]*?overflow-y:\s*auto/);

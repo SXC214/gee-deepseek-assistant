@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   addPlanAnswer,
   applyPlanResponse,
+  containsFencedCodeBlock,
   createPlanSession,
   mergeSources,
   parsePlanResponse,
@@ -9,6 +10,7 @@ import {
   sanitizePlanSession,
   serializePlanSession,
   setPlanState,
+  stripFencedCodeBlocks,
   validatePlanResponse
 } from "../lib/plan.js";
 
@@ -80,6 +82,22 @@ assert.match(invalid.errors.join("\n"), /timeRange/);
 const codeDuringPlanning = structuredClone(needsClarification);
 codeDuringPlanning.method = "```javascript\nvar image = ee.Image('x');\n```";
 assert.match(validatePlanResponse(codeDuringPlanning, merged).errors.join("\n"), /must not contain executable JavaScript/);
+
+// ISS-008: premature fenced code detection treats ```json plan wrappers as
+// ordinary responses but flags executable fences, and stripping keeps the
+// plan text intact so parsing can still succeed.
+assert.equal(containsFencedCodeBlock("```json\n{\"status\":\"ready\"}\n```"), false);
+assert.equal(containsFencedCodeBlock('{"status":"needs_clarification"}'), false);
+assert.equal(containsFencedCodeBlock("```javascript\nvar image = ee.Image('x');\n```"), true);
+assert.equal(containsFencedCodeBlock("说明\n```\nvar image = ee.Image('x');\n```"), true, "language-less fences with code bodies count as code");
+assert.equal(containsFencedCodeBlock("```\n{\"status\":\"ready\"}\n```"), false, "language-less fences holding JSON stay plan text");
+const mixedPlanText = "草案：\n```json\n{\"status\":\"needs_clarification\"}\n```\n```javascript\nMap.addLayer(ee.Image('x'));\n```";
+const strippedPlanText = stripFencedCodeBlocks(mixedPlanText);
+assert.match(strippedPlanText, /\`\`\`json/);
+assert.match(strippedPlanText, /needs_clarification/);
+assert.doesNotMatch(strippedPlanText, /Map\.addLayer/);
+assert.equal(parsePlanResponse(strippedPlanText).status, "needs_clarification");
+assert.equal(stripFencedCodeBlocks("没有围栏的纯文本"), "没有围栏的纯文本");
 
 const incompleteDataset = structuredClone(incompleteReady);
 incompleteDataset.requirements = {

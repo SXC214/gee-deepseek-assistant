@@ -3,7 +3,7 @@ import { createOrchestrator } from "../lib/orchestrator.js";
 
 // Mock deps + chrome runtime for the orchestrator. The direct (non-streaming)
 // request path is exercised by keeping supportsThinking false.
-function createHarness({ settingsOverride = {}, editorState = null, streamAnswer = "流式回答" } = {}) {
+function createHarness({ settingsOverride = {}, editorState = null, streamAnswer = "流式回答", aiAnswer = "最终回答" } = {}) {
   const calls = {
     appended: [],
     statuses: [],
@@ -31,7 +31,7 @@ function createHarness({ settingsOverride = {}, editorState = null, streamAnswer
         if (message.type === "TOOLS_SEARCH") return { ok: true, context: "", sources: [], warnings: [] };
         if (message.type === "AI_CHAT") {
           calls.aiChats.push(message.payload);
-          return { ok: true, content: "最终回答", finishReason: "stop", usage: { total_tokens: 7 } };
+          return { ok: true, content: aiAnswer, finishReason: "stop", usage: { total_tokens: 7 } };
         }
         return { ok: true };
       },
@@ -308,6 +308,58 @@ function lastAiChat(calls) {
   const { orchestrator } = createHarness();
   const result = orchestrator.stopRequest(() => assert.fail("abort must not be sent"));
   assert.equal(result.stopped, false);
+}
+
+// ISS-008: a plan response mixing a valid structured plan with a premature
+// fenced code block must degrade gracefully — the plan is applied, the code
+// is ignored (never shown as a candidate) and the user is notified.
+{
+  const mixedPlanAnswer = [
+    "先给出方案草案：",
+    "```json",
+    '{"status":"needs_clarification","goal":"计算广州市 NDVI 均值","questions":["时间聚合采用哪种方式？"]}',
+    "```",
+    "也可以直接实现：",
+    "```javascript",
+    "var image = ee.Image('MODIS/061/MOD13Q1');",
+    "Map.addLayer(image);",
+    "```"
+  ].join("\n");
+  const { calls, orchestrator } = createHarness({ aiAnswer: mixedPlanAnswer });
+  await orchestrator.executePrompt("计算广州市 NDVI 均值", true);
+
+  assert.equal(calls.aiChats.at(-1).purpose, "plan_research");
+  assert.equal(calls.candidates.length, 0, "premature plan-stage code must never become a candidate");
+  const notice = calls.appended.find((entry) => entry.role === "assistant" && entry.purpose === "plan_action");
+  assert.ok(notice, "user must be told the premature code was ignored");
+  assert.match(notice.text, /计划阶段提前返回了代码，已忽略未应用/);
+  const errors = calls.appended.filter((entry) => entry.role === "error");
+  assert.equal(errors.length, 0, "a salvageable plan must not surface as an error");
+  assert.equal(orchestrator.getActivePlan().state, "clarifying");
+  assert.equal(orchestrator.getActivePlan().plan.questions[0].prompt, "时间聚合采用哪种方式？");
+  assert.ok(calls.statuses.some((status) => status.text.startsWith("等待需求澄清")));
+}
+
+// ISS-008: a plan response that is only fenced code must not crash, must not
+// apply anything, and must surface a clear Chinese retry message while the
+// plan session recovers to its last stable state.
+{
+  const codeOnlyAnswer = "```javascript\nvar image = ee.Image('MODIS/061/MOD13Q1');\nMap.addLayer(image);\n```";
+  const { calls, orchestrator } = createHarness({ aiAnswer: codeOnlyAnswer });
+  await orchestrator.executePrompt("计算广州市 NDVI 均值", true);
+
+  assert.equal(calls.candidates.length, 0, "plan-stage code must never reach the editor candidate path");
+  const errors = calls.appended.filter((entry) => entry.role === "error");
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].purpose, "plan");
+  assert.match(errors[0].text, /模型在计划阶段提前返回了代码，已忽略未应用/);
+  assert.match(errors[0].text, /未形成有效计划/);
+  assert.match(errors[0].text, /重新发送需求重试|继续/);
+  assert.ok(calls.statuses.some((status) => status.state === "error"));
+  assert.equal(orchestrator.isBusy(), false);
+  const recovered = orchestrator.getActivePlan();
+  assert.equal(recovered.state, recovered.stableState, "plan session must recover to a stable state");
+  assert.equal(recovered.plan, null);
 }
 
 console.log("Orchestrator tests passed.");
