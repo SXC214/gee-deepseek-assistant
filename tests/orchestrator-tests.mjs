@@ -3,14 +3,17 @@ import { createOrchestrator } from "../lib/orchestrator.js";
 
 // Mock deps + chrome runtime for the orchestrator. The direct (non-streaming)
 // request path is exercised by keeping supportsThinking false.
-function createHarness({ settingsOverride = {}, editorState = null } = {}) {
+function createHarness({ settingsOverride = {}, editorState = null, streamAnswer = "流式回答" } = {}) {
   const calls = {
     appended: [],
     statuses: [],
     busy: [],
     aiChats: [],
     candidates: [],
-    composerModes: []
+    composerModes: [],
+    connects: [],
+    portPosts: [],
+    portDisconnects: []
   };
   const settings = {
     hasApiKey: true,
@@ -32,8 +35,34 @@ function createHarness({ settingsOverride = {}, editorState = null } = {}) {
         }
         return { ok: true };
       },
-      connect() {
-        throw new Error("streaming not expected in these tests");
+      connect({ name } = {}) {
+        calls.connects.push(name);
+        const messageListeners = [];
+        const port = {
+          name,
+          onMessage: { addListener: (listener) => messageListeners.push(listener) },
+          onDisconnect: { addListener: () => {} },
+          postMessage(message) {
+            calls.portPosts.push(message);
+            if (message?.type === "START") {
+              queueMicrotask(() => {
+                for (const listener of messageListeners) {
+                  listener({
+                    type: "DONE",
+                    requestId: message.payload?.requestId,
+                    content: streamAnswer,
+                    usage: { total_tokens: 9 },
+                    finishReason: "stop"
+                  });
+                }
+              });
+            }
+          },
+          disconnect() {
+            calls.portDisconnects.push(name);
+          }
+        };
+        return port;
       }
     },
     appendMessage: (role, text, options) => { calls.appended.push({ role, text, ...options }); },
@@ -128,6 +157,46 @@ function lastAiChat(calls) {
   const conversation = orchestrator.getDirectConversation();
   assert.equal(conversation.length, 12, "window capped at 12 messages");
   assert.equal(conversation[0].role, "user", "alignConversationToUser keeps a user turn first");
+}
+
+// compatibleStreaming opt-in: a compatible endpoint routes through the
+// streaming Port instead of the AI_CHAT one-shot message (M1).
+{
+  const { calls, orchestrator } = createHarness({
+    settingsOverride: {
+      baseUrl: "https://my-openai-compatible.example/v1",
+      model: "generic-model",
+      supportsThinking: false,
+      compatibleStreaming: true
+    }
+  });
+  await orchestrator.executePrompt("兼容流式", false);
+
+  assert.equal(calls.aiChats.length, 0, "compatibleStreaming must bypass AI_CHAT");
+  assert.deepEqual(calls.connects, ["AI_CHAT_STREAM"], "opt-in opens the stream Port");
+  assert.equal(calls.portPosts.length, 1);
+  assert.equal(calls.portPosts[0].type, "START");
+  assert.equal(calls.portPosts[0].payload.purpose, "direct");
+  const assistant = calls.appended.find((entry) => entry.role === "assistant" && entry.purpose === "direct");
+  assert.equal(assistant.text, "流式回答");
+  assert.deepEqual(orchestrator.getDirectConversation().at(-1), { role: "assistant", content: "流式回答" });
+  assert.ok(calls.statuses.some((status) => status.text.includes("完成 · 9 tokens")));
+}
+
+// Opt-in off: the same compatible endpoint keeps the non-streaming AI_CHAT path.
+{
+  const { calls, orchestrator } = createHarness({
+    settingsOverride: {
+      baseUrl: "https://my-openai-compatible.example/v1",
+      model: "generic-model",
+      supportsThinking: false,
+      compatibleStreaming: false
+    }
+  });
+  await orchestrator.executePrompt("兼容非流式", false);
+  assert.equal(calls.aiChats.length, 1, "opt-in off keeps AI_CHAT");
+  assert.equal(calls.connects.length, 0, "opt-in off never opens the stream Port");
+  assert.ok(calls.statuses.some((status) => status.text.includes("兼容模式")));
 }
 
 // Queue drain: messages execute in FIFO order and the queue empties.

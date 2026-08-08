@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
+import { createOrchestrator } from "../lib/orchestrator.js";
 
 if (!globalThis.crypto) globalThis.crypto = webcrypto;
 
@@ -467,6 +468,114 @@ await waitUntil(() => compatRetryPosted.some((message) => message.type === "DONE
 assert.equal(compatRetryFetches, 2, "compatible streams retry once while nothing was produced");
 assert.equal(compatRetryPosted.find((message) => message.type === "DONE").content, "recovered");
 workerModule.__timings.streamRetryDelayMs = 1000;
+
+// ---- Cross-module chain (M1/m9): settings -> orchestrator -> worker stream
+// Port. The orchestrator reads SETTINGS_GET through the real message bus and
+// must pick the streaming Port for a compatible endpoint with the opt-in on.
+localData.settings = {
+  ...localData.settings,
+  baseUrl: "https://compatible.example.com/v1",
+  model: "generic-chat-model",
+  compatibleStreaming: true
+};
+let chainStreamBody = null;
+globalThis.fetch = (_url, options) => {
+  chainStreamBody = JSON.parse(options.body);
+  return sseResponse([
+    'data: {"choices":[{"delta":{"content":"chain hello"}}]}',
+    'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+    "data: [DONE]",
+    ""
+  ].join("\n\n"));
+};
+const chainAppended = [];
+let chainSettings = null;
+const chainRuntime = {
+  lastError: null,
+  sendMessage: (message) => dispatch(message),
+  connect({ name } = {}) {
+    const panelListeners = [];
+    const workerPort = {
+      name,
+      onMessage: createEvent(),
+      onDisconnect: createEvent(),
+      postMessage(message) {
+        for (const listener of [...panelListeners]) listener(message);
+      }
+    };
+    const panelPort = {
+      name,
+      onMessage: { addListener: (listener) => panelListeners.push(listener) },
+      onDisconnect: { addListener: () => {} },
+      postMessage(message) {
+        workerPort.onMessage.fire(message);
+      },
+      disconnect() {
+        workerPort.onDisconnect.fire();
+      }
+    };
+    runtimeOnConnect.fire(workerPort);
+    return panelPort;
+  }
+};
+const chainDeps = {
+  runtime: chainRuntime,
+  appendMessage: (role, text, options) => { chainAppended.push({ role, text, ...options }); },
+  showCandidate: () => {},
+  setBusy: () => {},
+  setStatus: () => {},
+  showError: () => {},
+  scrollConversationToEnd: () => {},
+  updateScrollFollower: () => {},
+  syncConversationEmptyState: () => {},
+  readEditor: async () => null,
+  openSettings: () => {},
+  selectComposerMode: () => {},
+  renderMessageQueue: () => {},
+  renderPlan: () => {},
+  persistMessageQueue: async () => {},
+  persistActivePlan: async (plan) => plan ?? null,
+  onSettingsLoaded: (settings) => { chainSettings = settings; },
+  renderToolSources: () => {},
+  setToolActivityState: () => {},
+  completeToolActivity: () => {},
+  hideToolResults: () => {},
+  createConsoleContextSection: () => "",
+  createReasoningView: () => ({ append() {}, complete() {}, remove() {} }),
+  contextOptions: () => ({ includeSelection: false, includeCode: false, datasetSearch: false, docsSearch: false }),
+  requiresEditorContext: () => false,
+  isNearScrollEnd: () => true,
+  isInitialized: () => true
+};
+const chainOrchestrator = createOrchestrator(chainDeps);
+await chainOrchestrator.executePrompt("跨模块链路", false);
+assert.equal(chainSettings.supportsThinking, false, "compatible endpoints never report thinking support");
+assert.equal(chainSettings.compatibleStreaming, true, "settings carry the streaming opt-in to the orchestrator");
+assert.ok(chainStreamBody, "the orchestrator reached the worker through the stream Port");
+assert.equal(chainStreamBody.stream, true, "compatible chain sends the plain stream flag");
+assert.equal("thinking" in chainStreamBody, false);
+assert.ok(chainAppended.some((entry) => entry.role === "assistant" && entry.text === "chain hello"));
+
+// Opt-in off in the same chain: the orchestrator falls back to AI_CHAT.
+localData.settings = { ...localData.settings, compatibleStreaming: false };
+let chainChatBody = null;
+globalThis.fetch = (_url, options) => {
+  chainChatBody = JSON.parse(options.body);
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    text: async () => JSON.stringify({
+      choices: [{ message: { content: "chain non-stream" }, finish_reason: "stop" }]
+    })
+  };
+};
+const chainFallbackOrchestrator = createOrchestrator(chainDeps);
+await chainFallbackOrchestrator.executePrompt("跨模块非流式", false);
+assert.ok(chainChatBody, "opt-in off reaches the worker through AI_CHAT");
+assert.equal(chainChatBody.stream, false, "AI_CHAT keeps the non-streaming shape");
+assert.ok(chainAppended.some((entry) => entry.role === "assistant" && entry.text === "chain non-stream"));
+localData.settings = { ...localData.settings, compatibleStreaming: true };
 
 // ---- Retrieval chain: concurrency gate and retry policy for Google pages.
 function pageResponse(body) {
