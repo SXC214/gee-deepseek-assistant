@@ -94,17 +94,21 @@
     });
   }
 
-  // Ordered multi-strategy fallback:
+  // Ordered multi-strategy fallback (semantic signals first, position last):
   // 1. `.console-entries` — the README-declared adaptation target.
-  // 2. The historical hardcoded GEE tab paths (kept as a secondary probe).
-  // 3. aria probing, then general semantic heuristics.
-  // The hardcoded probe reports "semantic_fallback" to keep the source label
+  // 2. ARIA probing: labelled tabs/panels whose semantics name the Console.
+  // 3. General semantic heuristics (console-like attributes/labels/errors).
+  // 4. The historical hardcoded "second tab" paths, kept strictly as the last
+  //    resort; every positional hit must still show a Console signal
+  //    (Console wording or console-like class/id), otherwise it is dropped
+  //    so a DOM reorder can never pass the Tasks tab off as the Console.
+  // The positional probe reports "semantic_fallback" to keep the source label
   // set consumed by lib/console.js unchanged.
   const CONSOLE_STRATEGIES = [
     { source: "legacy_selector", find: () => uniqueElements(safeQueryAll(CONSOLE_ENTRIES_SELECTOR)) },
-    { source: "semantic_fallback", find: findGeeConsoleTabCandidates },
     { source: "aria_tabpanel", find: findAriaConsolePanels },
-    { source: "semantic_fallback", find: findSemanticConsoleCandidates }
+    { source: "semantic_fallback", find: findSemanticConsoleCandidates },
+    { source: "semantic_fallback", find: findGeeConsoleTabCandidates }
   ];
 
   function readConsole() {
@@ -222,6 +226,11 @@
     });
   }
 
+  // Positional last-resort probe: the historical hardcoded GEE tab paths.
+  // Position alone is no longer trusted — each hit must also carry a Console
+  // signal (Console wording, console-like class/id, or error/print text),
+  // otherwise the candidate is dropped and later handling reports the panel
+  // as unavailable instead of reading the wrong tab.
   function findGeeConsoleTabCandidates() {
     const tabs = uniqueElements([
       ...safeQueryAll(GEE_CONSOLE_TAB_EXACT_SELECTOR),
@@ -229,9 +238,19 @@
     ]);
     const candidates = [];
     for (const tab of tabs) {
-      candidates.push(tab, ...findOpenShadowContents(tab));
+      for (const probe of [tab, ...findOpenShadowContents(tab)]) {
+        if (hasPositionalConsoleSignal(probe)) candidates.push(probe);
+      }
     }
     return uniqueElements(candidates);
+  }
+
+  function hasPositionalConsoleSignal(element) {
+    if (!element) return false;
+    if (/\bconsole\b/i.test(elementLabel(element))) return true;
+    const attributes = `${element.getAttribute?.("class") || ""} ${element.getAttribute?.("id") || ""}`;
+    if (/console/i.test(attributes)) return true;
+    return hasConsoleSignal(rawElementText(element));
   }
 
   function findOpenShadowContents(host) {

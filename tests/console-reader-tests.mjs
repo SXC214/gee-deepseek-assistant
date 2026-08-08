@@ -261,7 +261,7 @@ const screenshotError = "Layer error: Image.select: Band pattern 'elevation' did
   assert.equal(response.consoleText, "primary legacy capture");
 }
 
-// Strategy priority: the hardcoded path beats aria probing.
+// Strategy priority: aria probing beats the hardcoded positional path.
 {
   const exactPath = "body > ee-app-context > div > div:nth-of-type(2) > div:nth-of-type(1) > div > div:nth-of-type(2) > div > ee-tab-panel > ee-tab:nth-of-type(2)";
   const errorDiv = new FakeElement({ text: screenshotError });
@@ -276,11 +276,11 @@ const screenshotError = "Layer error: Image.select: Band pattern 'elevation' did
     },
     ids: { "console-panel": ariaPanel }
   })();
-  assert.equal(response.consoleRead.source, "semantic_fallback");
-  assert.match(response.consoleText, /Band pattern 'elevation'/);
+  assert.equal(response.consoleRead.source, "aria_tabpanel");
+  assert.equal(response.consoleText, "aria panel text");
 }
 
-// The loose hardcoded path wins over aria probing as well.
+// Aria probing also beats the loose hardcoded path.
 {
   const errorDiv = new FakeElement({ text: screenshotError });
   const shadowRoot = new FakeRoot({ text: screenshotError, selectors: { div: [errorDiv], "*": [errorDiv] } });
@@ -294,8 +294,39 @@ const screenshotError = "Layer error: Image.select: Band pattern 'elevation' did
     },
     ids: { "console-panel": ariaPanel }
   })();
+  assert.equal(response.consoleRead.source, "aria_tabpanel");
+  assert.equal(response.consoleText, "aria panel text");
+}
+
+// Positional fallback still captures when the hit carries a Console signal.
+{
+  const consoleTab = new FakeElement({ tagName: "EE-TAB", text: `Console\n${screenshotError}` });
+  const exactPath = "body > ee-app-context > div > div:nth-of-type(2) > div:nth-of-type(1) > div > div:nth-of-type(2) > div > ee-tab-panel > ee-tab:nth-of-type(2)";
+  const response = await createHarness({ selectors: { [exactPath]: [consoleTab] } })();
+  assert.equal(response.consoleRead.status, "captured");
   assert.equal(response.consoleRead.source, "semantic_fallback");
   assert.match(response.consoleText, /Band pattern 'elevation'/);
+}
+
+// Positional fallback without any Console signal is dropped: the reader must
+// not trust a bare position hit (e.g. the Tasks tab after a DOM reorder).
+{
+  const tasksTab = new FakeElement({ tagName: "EE-TAB", text: "Tasks\nRun a task" });
+  const exactPath = "body > ee-app-context > div > div:nth-of-type(2) > div:nth-of-type(1) > div > div:nth-of-type(2) > div > ee-tab-panel > ee-tab:nth-of-type(2)";
+  const response = await createHarness({ selectors: { [exactPath]: [tasksTab] } })();
+  assert.equal(response.consoleRead.status, "unavailable");
+  assert.equal(response.consoleRead.reason, "container_not_found");
+}
+
+// Same guard for the loose positional path.
+{
+  const tasksShadow = new FakeRoot({ text: "Task finished" });
+  const tasksTab = new FakeElement({ tagName: "EE-TAB", shadowRoot: tasksShadow });
+  const response = await createHarness({
+    selectors: { "ee-app-context ee-tab-panel > ee-tab:nth-of-type(2)": [tasksTab] }
+  })();
+  assert.equal(response.consoleRead.status, "unavailable");
+  assert.equal(response.consoleRead.reason, "container_not_found");
 }
 
 {
