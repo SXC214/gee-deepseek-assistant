@@ -85,14 +85,16 @@ DeepSeek 默认 API 地址为 `https://api.deepseek.com`。扩展会调用其 `/
 配置步骤：
 
 1. 在 Google Cloud Console 中为你的 Earth Engine 项目创建一个 OAuth 客户端（应用类型选“Web 应用”）。
-2. 打开侧栏设置，把其中展示的只读重定向 URI（可点“复制”）添加到该 OAuth 客户端的“已获授权的重定向 URI”。
-3. 把 OAuth 客户端 ID 填入设置的“Google OAuth 客户端 ID”，并在“Earth Engine Project ID”中填写同一云项目 ID。
-4. 点击侧栏工具区的“资产/任务”。首次加载会弹出 Google 授权窗口；授权后令牌仅缓存在 `chrome.storage.session`，关闭浏览器即清除。
+2. 在 OAuth 同意屏幕配置中，发布状态保持“测试”即可（`earthengine` 属于敏感范围，正式发布需通过 Google 验证）；但必须把将要使用扩展的 Google 账号加入“测试用户”列表，否则授权时会出现 `403: access_denied` / “Access blocked: …has not completed the Google verification process”。
+3. 打开侧栏设置，把其中展示的只读重定向 URI（可点“复制”）添加到该 OAuth 客户端的“已获授权的重定向 URI”。
+4. 把 OAuth 客户端 ID 填入设置的“Google OAuth 客户端 ID”，并在“Earth Engine Project ID”中填写同一云项目 ID。
+5. 点击侧栏工具区的“资产/任务”。首次加载会弹出 Google 授权窗口；授权后令牌仅缓存在 `chrome.storage.session`，关闭浏览器即清除。
 
 已知限制：
 
 - 未打包（开发者模式加载）的扩展 ID 可能在重新安装或更换浏览器后变化，导致重定向 URI 改变；届时需要在 Google Cloud Console 更新该 OAuth 客户端的重定向 URI。
 - REST 直连目前只提供资产与任务的只读浏览，不会写入资产、发起导出或以扩展身份执行任何 Earth Engine 计算。
+- OAuth 同意屏幕处于“测试”状态时，Google 签发的访问令牌有效期受限（约 7 天）；过期后扩展会重新弹出授权窗口，重新授权即可，属预期行为。
 
 ## 安全边界
 
