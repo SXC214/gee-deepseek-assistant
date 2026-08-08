@@ -717,6 +717,118 @@ assert.equal(lockSecond.ok, true);
 assert.equal(lockCatalogFetches, 1, "concurrent searches share one in-flight index fetch");
 assert.ok(Array.isArray(localData.datasetIndexV2?.entries), "parsed index is persisted for restarts");
 
+// Abort decoupling (M6): a shared index load is never bound to the first
+// caller's signal. Cancelling the first waiter must not cancel the shared
+// load, and the second waiter still completes.
+workerModule.__testing.clearRetrievalCaches();
+delete localData.datasetIndexV2;
+delete localData.pageDetailCacheV1;
+let detachCatalogFetches = 0;
+let detachCatalogSignal = null;
+globalThis.fetch = (url, options) => {
+  const target = String(url);
+  if (!target.includes("MODIS_DETACH")) {
+    detachCatalogFetches += 1;
+    detachCatalogSignal = options.signal;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => resolve(pageResponse(datasetIndexHtml("MODIS_DETACH", 120))), 40);
+      options.signal.addEventListener("abort", () => {
+        clearTimeout(timer);
+        reject(new DOMException("Aborted", "AbortError"));
+      }, { once: true });
+    });
+  }
+  return Promise.resolve(pageResponse(detailPageHtml));
+};
+const detachFirst = dispatch({
+  type: "TOOLS_SEARCH",
+  payload: { requestId: "detach-a", query: "modis", datasetSearch: true, docsSearch: false }
+});
+const detachSecond = dispatch({
+  type: "TOOLS_SEARCH",
+  payload: { requestId: "detach-b", query: "modis", datasetSearch: true, docsSearch: false }
+});
+await waitUntil(() => Boolean(detachCatalogSignal), 300);
+await dispatch({ type: "AI_ABORT", requestId: "detach-a" });
+const detachFirstResult = await detachFirst;
+assert.equal(detachFirstResult.ok, false);
+assert.equal(detachFirstResult.error, "请求已停止", "the cancelled waiter sees its own abort");
+const detachSecondResult = await detachSecond;
+assert.equal(detachSecondResult.ok, true, "the surviving waiter is unaffected by the first waiter's abort");
+assert.equal(detachCatalogFetches, 1, "the shared index load was neither cancelled nor restarted");
+assert.equal(detachCatalogSignal.aborted, false, "the shared controller outlives a single waiter's abort");
+
+// The mirror case: cancelling the second waiter must not stop the first.
+workerModule.__testing.clearRetrievalCaches();
+delete localData.datasetIndexV2;
+delete localData.pageDetailCacheV1;
+let reverseCatalogFetches = 0;
+let reverseCatalogSignal = null;
+globalThis.fetch = (url, options) => {
+  const target = String(url);
+  if (!target.includes("MODIS_REVERSE")) {
+    reverseCatalogFetches += 1;
+    reverseCatalogSignal = options.signal;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => resolve(pageResponse(datasetIndexHtml("MODIS_REVERSE", 120))), 40);
+      options.signal.addEventListener("abort", () => {
+        clearTimeout(timer);
+        reject(new DOMException("Aborted", "AbortError"));
+      }, { once: true });
+    });
+  }
+  return Promise.resolve(pageResponse(detailPageHtml));
+};
+const reverseFirst = dispatch({
+  type: "TOOLS_SEARCH",
+  payload: { requestId: "reverse-a", query: "modis", datasetSearch: true, docsSearch: false }
+});
+const reverseSecond = dispatch({
+  type: "TOOLS_SEARCH",
+  payload: { requestId: "reverse-b", query: "modis", datasetSearch: true, docsSearch: false }
+});
+await waitUntil(() => Boolean(reverseCatalogSignal), 300);
+await dispatch({ type: "AI_ABORT", requestId: "reverse-b" });
+const reverseSecondResult = await reverseSecond;
+assert.equal(reverseSecondResult.ok, false, "the second waiter can cancel its own wait independently");
+const reverseFirstResult = await reverseFirst;
+assert.equal(reverseFirstResult.ok, true, "the first waiter survives the second waiter's abort");
+assert.equal(reverseCatalogFetches, 1);
+
+// Reference counting: when every waiter cancels, the underlying load stops.
+workerModule.__testing.clearRetrievalCaches();
+delete localData.datasetIndexV2;
+delete localData.pageDetailCacheV1;
+let allAbortSignal = null;
+globalThis.fetch = (url, options) => {
+  const target = String(url);
+  if (!target.includes("MODIS_ALLABORT")) {
+    allAbortSignal = options.signal;
+    return new Promise((_resolve, reject) => {
+      options.signal.addEventListener("abort", () => {
+        reject(new DOMException("Aborted", "AbortError"));
+      }, { once: true });
+    });
+  }
+  return Promise.resolve(pageResponse(detailPageHtml));
+};
+const allFirst = dispatch({
+  type: "TOOLS_SEARCH",
+  payload: { requestId: "all-abort-a", query: "modis", datasetSearch: true, docsSearch: false }
+});
+const allSecond = dispatch({
+  type: "TOOLS_SEARCH",
+  payload: { requestId: "all-abort-b", query: "modis", datasetSearch: true, docsSearch: false }
+});
+await waitUntil(() => Boolean(allAbortSignal), 300);
+await dispatch({ type: "AI_ABORT", requestId: "all-abort-a" });
+assert.equal(allAbortSignal.aborted, false, "one remaining waiter keeps the shared load alive");
+await dispatch({ type: "AI_ABORT", requestId: "all-abort-b" });
+const [allFirstResult, allSecondResult] = await Promise.all([allFirst, allSecond]);
+assert.equal(allFirstResult.ok, false);
+assert.equal(allSecondResult.ok, false);
+assert.equal(allAbortSignal.aborted, true, "the shared load is cancelled once every waiter gives up");
+
 // Parsed-result cache: a repeat search is served without re-fetching pages.
 workerModule.__testing.clearRetrievalCaches();
 delete localData.pageDetailCacheV1;

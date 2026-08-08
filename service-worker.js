@@ -674,25 +674,25 @@ async function runTool(name, callback) {
 }
 
 async function searchDatasets(query, signal) {
-  const index = await getCachedIndex("datasetIndexV2", async () => {
-    const html = await fetchText(DATASET_INDEX_URL, signal);
+  const index = await getCachedIndex("datasetIndexV2", async (loadSignal) => {
+    const html = await fetchText(DATASET_INDEX_URL, loadSignal);
     const parsed = parseDatasetIndexHtml(html);
     if (parsed.length < 100) throw new Error("官方数据目录索引解析失败");
     return parsed;
-  });
+  }, signal);
   const candidates = selectDatasetCandidates(index, query, 6);
   const details = await fetchDetails(candidates, query, "dataset", signal);
   return details.map((detail) => ({ ...detail, type: "dataset" }));
 }
 
 async function searchDocs(query, signal) {
-  const index = await getCachedIndex("docsIndexV2", async () => {
-    const pages = await Promise.all(DOC_INDEX_URLS.map((url) => fetchText(url, signal)));
+  const index = await getCachedIndex("docsIndexV2", async (loadSignal) => {
+    const pages = await Promise.all(DOC_INDEX_URLS.map((url) => fetchText(url, loadSignal)));
     const merged = pages.flatMap((html) => parseDocsIndexHtml(html));
     const unique = [...new Map(merged.map((entry) => [entry.url, entry])).values()];
     if (unique.length < 30) throw new Error("官方文档索引解析失败");
     return unique;
-  });
+  }, signal);
 
   const direct = directApiDocEntries(query);
   const ranked = rankEntries(index, query, 8);
@@ -701,7 +701,11 @@ async function searchDocs(query, signal) {
   return details.map((detail) => ({ ...detail, type: "docs" }));
 }
 
-async function getCachedIndex(key, loader) {
+// The shared load runs under its own controller: no waiter's abort may cancel
+// the shared fetch, and no waiter is bound to another waiter's signal. Each
+// caller waits with its own signal; the underlying task is aborted only when
+// every waiter has given up (reference counting).
+async function getCachedIndex(key, load, waiterSignal) {
   const stored = await chrome.storage.local.get(key);
   const cached = stored[key];
   if (cached?.createdAt && Date.now() - cached.createdAt < INDEX_TTL_MS && Array.isArray(cached.entries)) {
@@ -710,22 +714,61 @@ async function getCachedIndex(key, loader) {
   // Concurrent searches share one fetch+parse pass for the same index key, so
   // a queued message or a dual-tool search never re-downloads the whole
   // catalog HTML while a parse is already running.
-  if (indexInFlight.has(key)) return indexInFlight.get(key);
-  const pending = (async () => {
-    try {
-      const entries = await loader();
-      try {
-        await chrome.storage.local.set({ [key]: { createdAt: Date.now(), entries } });
-      } catch (error) {
-        console.warn(`索引缓存写入失败（${key}），本次结果仅保留在内存：`, error);
+  let entry = indexInFlight.get(key);
+  if (!entry) {
+    const controller = new AbortController();
+    entry = {
+      controller,
+      waiters: 0,
+      promise: (async () => {
+        try {
+          const entries = await load(controller.signal);
+          try {
+            await chrome.storage.local.set({ [key]: { createdAt: Date.now(), entries } });
+          } catch (error) {
+            console.warn(`索引缓存写入失败（${key}），本次结果仅保留在内存：`, error);
+          }
+          return entries;
+        } finally {
+          indexInFlight.delete(key);
+        }
+      })()
+    };
+    indexInFlight.set(key, entry);
+  }
+  entry.waiters += 1;
+  try {
+    return await awaitWithOwnAbort(entry.promise, waiterSignal);
+  } finally {
+    entry.waiters -= 1;
+    if (entry.waiters <= 0) entry.controller.abort();
+  }
+}
+
+// Waits for a shared promise while honoring only the waiter's own signal.
+function awaitWithOwnAbort(promise, signal) {
+  if (!signal) return promise;
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(createWaiterAbortError());
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
       }
-      return entries;
-    } finally {
-      indexInFlight.delete(key);
-    }
-  })();
-  indexInFlight.set(key, pending);
-  return pending;
+    );
+  });
+}
+
+function createWaiterAbortError() {
+  const error = new Error("请求已停止");
+  error.name = "AbortError";
+  return error;
 }
 
 async function fetchDetails(entries, query, kind, signal) {
