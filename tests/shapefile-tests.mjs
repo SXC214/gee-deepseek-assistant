@@ -494,6 +494,32 @@ assert.equal(SHP_CLOUD_DIRECT_MAX_BYTES, 8 * 1024 * 1024);
   );
 }
 
+// ---------- truncated multi-geometry record bodies are rejected ----------
+
+{
+  // MultiPoint declares 2 points (full body 72 bytes) but the record is cut
+  // to 56 bytes; without a full-body check the reader would run past the
+  // record into neighbouring data.
+  const truncatedMultiPoint = multiPointContent([[1, 2], [3, 4]]).subarray(0, 56);
+  await assert.rejects(
+    parseShapefileToGeoJson({
+      shp: toArrayBuffer(buildShp(8, [truncatedMultiPoint])),
+      dbf: toArrayBuffer(buildEmptyDbf(1))
+    }),
+    (error) => error.message.includes("MultiPoint") && error.message.includes("已损坏")
+  );
+
+  // PolyLine declares 1 part / 2 points (full body 80 bytes), cut to 60.
+  const truncatedPath = pathsContent(3, [[[0, 0], [1, 1]]]).subarray(0, 60);
+  await assert.rejects(
+    parseShapefileToGeoJson({
+      shp: toArrayBuffer(buildShp(3, [truncatedPath])),
+      dbf: toArrayBuffer(buildEmptyDbf(1))
+    }),
+    (error) => error.message.includes("PolyLine/Polygon") && error.message.includes("已损坏")
+  );
+}
+
 // ---------- limits ----------
 
 {
