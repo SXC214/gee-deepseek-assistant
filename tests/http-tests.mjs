@@ -197,7 +197,7 @@ function stalledBodyResponse() {
   globalThis.fetch = async () => {
     calls += 1;
     return calls === 1
-      ? mockResponse(429, { headers: { "Retry-After": new Date(Date.now() + 1000).toUTCString() } })
+      ? mockResponse(429, { headers: { "Retry-After": new Date(Date.now() + 2000).toUTCString() } })
       : mockResponse(200);
   };
   const started = Date.now();
@@ -209,8 +209,9 @@ function stalledBodyResponse() {
   const elapsed = Date.now() - started;
   assert.equal(response.status, 200);
   assert.equal(calls, 2);
-  assert.ok(elapsed >= 800, `waited for HTTP-date Retry-After, elapsed=${elapsed}`);
-  assert.ok(elapsed < 3000, "did not wait beyond the date");
+  // HTTP-date carries second granularity, so allow for rounding at the edges.
+  assert.ok(elapsed >= 500, `waited for HTTP-date Retry-After, elapsed=${elapsed}`);
+  assert.ok(elapsed < 4000, "did not wait beyond the date");
 }
 
 // --- Retry-After in the past retries without waiting.
