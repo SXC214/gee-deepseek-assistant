@@ -794,28 +794,44 @@ async function fetchDetailPage(entry, query, kind, signal) {
   if (memoryHit) return memoryHit;
   // Concurrent first queries of the same page share one fetch+parse pass, so
   // a queued message or a dual-tool search never re-downloads the page while
-  // a parse is already running.
-  if (detailInFlight.has(key)) return detailInFlight.get(key);
-  const pending = (async () => {
-    try {
-      // Survives service worker restarts: persistent summaries are consulted
-      // before any network fetch, and expired entries are filtered on read.
-      const persistedHit = await readPersistedDetail(key);
-      if (persistedHit) {
-        rememberDetailResult(key, persistedHit);
-        return persistedHit;
+  // a parse is already running. Like getCachedIndex, the shared load runs
+  // under its own controller: no waiter's abort may cancel the shared fetch,
+  // no waiter is bound to another waiter's signal, and the underlying task is
+  // aborted only when every waiter has given up (reference counting).
+  let pending = detailInFlight.get(key);
+  if (!pending) {
+    const controller = new AbortController();
+    const promise = (async () => {
+      try {
+        // Survives service worker restarts: persistent summaries are consulted
+        // before any network fetch, and expired entries are filtered on read.
+        const persistedHit = await readPersistedDetail(key);
+        if (persistedHit) {
+          rememberDetailResult(key, persistedHit);
+          return persistedHit;
+        }
+        const html = await fetchText(entry.url, controller.signal);
+        const result = extractOfficialPage(html, entry.url, query, kind);
+        rememberDetailResult(key, result);
+        await persistDetailResult(key, result);
+        return result;
+      } finally {
+        detailInFlight.delete(key);
       }
-      const html = await fetchText(entry.url, signal);
-      const result = extractOfficialPage(html, entry.url, query, kind);
-      rememberDetailResult(key, result);
-      await persistDetailResult(key, result);
-      return result;
-    } finally {
-      detailInFlight.delete(key);
-    }
-  })();
-  detailInFlight.set(key, pending);
-  return pending;
+    })();
+    // A pre-aborted waiter never attaches a handler, so shield the shared
+    // promise to keep the reference-counted abort from going unhandled.
+    promise.catch(() => {});
+    pending = { controller, waiters: 0, promise };
+    detailInFlight.set(key, pending);
+  }
+  pending.waiters += 1;
+  try {
+    return await awaitWithOwnAbort(pending.promise, signal);
+  } finally {
+    pending.waiters -= 1;
+    if (pending.waiters <= 0) pending.controller.abort();
+  }
 }
 
 function readMemoryDetail(key) {

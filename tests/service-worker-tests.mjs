@@ -936,6 +936,107 @@ assert.equal(detailLockB.ok, true);
 assert.equal(detailLockFetches, 3, "concurrent first queries share one fetch per detail page");
 assert.deepEqual(detailLockB.sources, detailLockA.sources, "shared parses produce identical sources");
 
+// Detail abort decoupling (M-1, mirror of M6): the shared page load runs
+// under its own controller. Cancelling the first waiter must not cancel the
+// shared fetch, and the second waiter still completes.
+workerModule.__testing.clearRetrievalCaches();
+delete localData.pageDetailCacheV1;
+localData.datasetIndexV2 = { createdAt: Date.now(), entries: datasetEntries("MODIS_DDETACH", 1) };
+let detailDetachFetches = 0;
+let detailDetachSignal = null;
+globalThis.fetch = (_url, options) => {
+  detailDetachFetches += 1;
+  detailDetachSignal = options.signal;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(pageResponse(detailPageHtml)), 40);
+    options.signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    }, { once: true });
+  });
+};
+const detailDetachFirst = dispatch({
+  type: "TOOLS_SEARCH",
+  payload: { requestId: "detail-detach-a", query: "modis", datasetSearch: true, docsSearch: false }
+});
+const detailDetachSecond = dispatch({
+  type: "TOOLS_SEARCH",
+  payload: { requestId: "detail-detach-b", query: "modis", datasetSearch: true, docsSearch: false }
+});
+await waitUntil(() => Boolean(detailDetachSignal), 300);
+await dispatch({ type: "AI_ABORT", requestId: "detail-detach-a" });
+const detailDetachFirstResult = await detailDetachFirst;
+assert.equal(detailDetachFirstResult.ok, false);
+assert.equal(detailDetachFirstResult.error, "请求已停止", "the cancelled detail waiter sees its own abort");
+const detailDetachSecondResult = await detailDetachSecond;
+assert.equal(detailDetachSecondResult.ok, true, "the surviving detail waiter is unaffected by the first waiter's abort");
+assert.equal(detailDetachFetches, 1, "the shared detail fetch was neither cancelled nor restarted");
+assert.equal(detailDetachSignal.aborted, false, "the shared detail controller outlives a single waiter's abort");
+
+// The mirror case: cancelling the second waiter must not stop the first.
+workerModule.__testing.clearRetrievalCaches();
+delete localData.pageDetailCacheV1;
+localData.datasetIndexV2 = { createdAt: Date.now(), entries: datasetEntries("MODIS_DREVERSE", 1) };
+let detailReverseFetches = 0;
+let detailReverseSignal = null;
+globalThis.fetch = (_url, options) => {
+  detailReverseFetches += 1;
+  detailReverseSignal = options.signal;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(pageResponse(detailPageHtml)), 40);
+    options.signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    }, { once: true });
+  });
+};
+const detailReverseFirst = dispatch({
+  type: "TOOLS_SEARCH",
+  payload: { requestId: "detail-reverse-a", query: "modis", datasetSearch: true, docsSearch: false }
+});
+const detailReverseSecond = dispatch({
+  type: "TOOLS_SEARCH",
+  payload: { requestId: "detail-reverse-b", query: "modis", datasetSearch: true, docsSearch: false }
+});
+await waitUntil(() => Boolean(detailReverseSignal), 300);
+await dispatch({ type: "AI_ABORT", requestId: "detail-reverse-b" });
+const detailReverseSecondResult = await detailReverseSecond;
+assert.equal(detailReverseSecondResult.ok, false, "the second detail waiter can cancel its own wait independently");
+const detailReverseFirstResult = await detailReverseFirst;
+assert.equal(detailReverseFirstResult.ok, true, "the first detail waiter survives the second waiter's abort");
+assert.equal(detailReverseFetches, 1);
+
+// Reference counting: when every detail waiter cancels, the underlying fetch
+// is aborted.
+workerModule.__testing.clearRetrievalCaches();
+delete localData.pageDetailCacheV1;
+localData.datasetIndexV2 = { createdAt: Date.now(), entries: datasetEntries("MODIS_DALLABORT", 1) };
+let detailAllAbortSignal = null;
+globalThis.fetch = (_url, options) => {
+  detailAllAbortSignal = options.signal;
+  return new Promise((_resolve, reject) => {
+    options.signal.addEventListener("abort", () => {
+      reject(new DOMException("Aborted", "AbortError"));
+    }, { once: true });
+  });
+};
+const detailAllFirst = dispatch({
+  type: "TOOLS_SEARCH",
+  payload: { requestId: "detail-all-abort-a", query: "modis", datasetSearch: true, docsSearch: false }
+});
+const detailAllSecond = dispatch({
+  type: "TOOLS_SEARCH",
+  payload: { requestId: "detail-all-abort-b", query: "modis", datasetSearch: true, docsSearch: false }
+});
+await waitUntil(() => Boolean(detailAllAbortSignal), 300);
+await dispatch({ type: "AI_ABORT", requestId: "detail-all-abort-a" });
+assert.equal(detailAllAbortSignal.aborted, false, "one remaining detail waiter keeps the shared fetch alive");
+await dispatch({ type: "AI_ABORT", requestId: "detail-all-abort-b" });
+const [detailAllFirstResult, detailAllSecondResult] = await Promise.all([detailAllFirst, detailAllSecond]);
+assert.equal(detailAllFirstResult.ok, false);
+assert.equal(detailAllSecondResult.ok, false);
+assert.equal(detailAllAbortSignal.aborted, true, "the shared detail fetch stops once every waiter gives up");
+
 // ---- GEE REST routing: independent OAuth orchestration behind messages.
 let geeAuthFlowCalls = 0;
 globalThis.chrome.identity = {
