@@ -137,6 +137,15 @@ assert.match(script, /serializeActivePlan\(chrome\.storage\.local/);
 assert.match(script, /function reportPersistFailure\(kind, error\)/);
 assert.match(script, /本地保存失败，仅保留在当前会话/);
 assert.match(script, /PERSIST_FAILURE_NOTIFY_COOLDOWN_MS = 10000/);
+// Eviction outcomes resync every affected in-memory state and never report a
+// degraded (metadata-only) candidate as saved (M5).
+assert.match(script, /function applyStorageEvictionOutcome\(outcome\)/);
+assert.match(script, /function resyncEvictedChatHistory\(entries\)/);
+assert.match(script, /outcome\.evictions\.includes\("chat-history-halved"\)/);
+assert.match(script, /outcome\.degraded/);
+assert.match(script, /代码候选仅保留了元信息，完整代码卡未保存/);
+assert.match(script, /error\.persistNotified = true/);
+assert.match(script, /if \(error\?\.persistNotified\) return;/);
 assert.match(orchestratorScript, /deps\.appendMessage\("user", prompt, \{ purpose: "direct" \}\)/);
 assert.match(script, /\.filter\(\(entry\) => entry\.purpose === "direct" && \["user", "assistant"\]\.includes\(entry\.role\)\)/);
 assert.match(orchestratorScript, /directConversation = alignConversationToUser\(/);

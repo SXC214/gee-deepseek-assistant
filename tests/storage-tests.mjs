@@ -75,7 +75,12 @@ function createFakeStorage(initial = {}) {
     chatKey: CHAT,
     candidateKey: CANDIDATE
   });
-  assert.deepEqual(outcome, { persisted: true, evictions: [], finalValue: [1, 2] });
+  assert.deepEqual(outcome, {
+    persisted: true,
+    degraded: false,
+    evictions: [],
+    finalValues: { [CHAT]: [1, 2] }
+  });
   assert.deepEqual(storage.data[CHAT], [1, 2]);
   assert.equal(storage.writes.length, 1);
 }
@@ -92,7 +97,8 @@ function createFakeStorage(initial = {}) {
     candidateKey: CANDIDATE
   });
   assert.equal(outcome.persisted, true);
-  assert.deepEqual(outcome.finalValue, [15, 16, 17, 18, 19], "halving keeps the newest half");
+  assert.equal(outcome.degraded, false);
+  assert.deepEqual(outcome.finalValues[CHAT], [15, 16, 17, 18, 19], "halving keeps the newest half");
   assert.deepEqual(storage.data[CHAT], [15, 16, 17, 18, 19]);
   assert.ok(outcome.evictions.length >= 2);
   assert.ok(outcome.evictions.every((eviction) => eviction === "chat-history-halved"));
@@ -115,13 +121,16 @@ function createFakeStorage(initial = {}) {
     candidateKey: CANDIDATE
   });
   assert.equal(outcome.persisted, true);
+  assert.equal(outcome.degraded, false);
   assert.ok(outcome.evictions.includes("chat-history-halved"), "chat history was halved before the candidate gave up");
   assert.equal(outcome.evictions.includes("candidate-meta-only"), false);
-  assert.deepEqual(storage.data[CANDIDATE], { code: "new", baseCode: "base" });
-  assert.ok(storage.data[CHAT].length <= 4);
+  assert.deepEqual(outcome.finalValues[CANDIDATE], { code: "new", baseCode: "base" });
+  assert.ok(outcome.finalValues[CHAT].length <= 4, "the halved chat snapshot is reported for in-memory resync");
 }
 
-// Nothing fits: candidate degrades to metadata so the chat write succeeds.
+// Nothing fits until the candidate degrades: the chat write then succeeds
+// with the last reduced snapshot (stage two never resurrects the original
+// oversized snapshot), and the reduction is flagged as degraded.
 {
   const storage = createFakeStorage({
     [CHAT]: [0],
@@ -139,13 +148,17 @@ function createFakeStorage(initial = {}) {
     candidateKey: CANDIDATE
   });
   assert.equal(outcome.persisted, true);
+  assert.equal(outcome.degraded, true, "candidate reduction is always flagged as degraded");
   assert.ok(outcome.evictions.includes("candidate-meta-only"));
   assert.deepEqual(storage.data[CANDIDATE], { code: "", baseCode: "" }, "candidate kept metadata only");
-  assert.deepEqual(storage.data[CHAT], target);
-  assert.deepEqual(outcome.finalValue, target);
+  assert.deepEqual(storage.data[CHAT], [{ id: "c" }], "stage two persists the last reduced snapshot");
+  assert.deepEqual(outcome.finalValues[CHAT], [{ id: "c" }]);
+  assert.deepEqual(outcome.finalValues[CANDIDATE], { code: "", baseCode: "" });
 }
 
 // Candidate target itself is oversized: it degrades to metadata in stage two.
+// The degraded record is stored, but the write reports persisted:false so the
+// UI never claims the full code card was saved (M5).
 {
   const storage = createFakeStorage();
   storage.setRejector((values) => values[CANDIDATE]?.code === "too-big");
@@ -155,9 +168,38 @@ function createFakeStorage(initial = {}) {
     chatKey: CHAT,
     candidateKey: CANDIDATE
   });
-  assert.equal(outcome.persisted, true);
+  assert.equal(outcome.persisted, false, "a meta-only fallback is not a successful candidate write");
+  assert.equal(outcome.degraded, true);
   assert.deepEqual(outcome.evictions, ["candidate-meta-only"]);
   assert.deepEqual(storage.data[CANDIDATE], { code: "", baseCode: "", tabId: 7 });
+  assert.deepEqual(outcome.finalValues[CANDIDATE], { code: "", baseCode: "", tabId: 7 });
+}
+
+// Stage two retries the last reduced chat snapshot, not the original one (M5):
+// any write larger than one entry fails here, so only the halved snapshot can
+// possibly fit; retrying the original would leave the target unpersisted.
+{
+  const storage = createFakeStorage({
+    [CHAT]: [0],
+    [CANDIDATE]: { code: "large", baseCode: "base" }
+  });
+  storage.setRejector((values, current) => {
+    if (values[CANDIDATE] !== undefined) return values[CANDIDATE].code !== "";
+    if (Array.isArray(values[CHAT]) && values[CHAT].length > 1) return true;
+    return current[CANDIDATE]?.code !== "";
+  });
+  const snapshot = Array.from({ length: 8 }, (_unused, index) => index);
+  const outcome = await setWithQuotaEviction(storage, {
+    targetKey: CHAT,
+    targetValue: snapshot,
+    chatKey: CHAT,
+    candidateKey: CANDIDATE
+  });
+  assert.equal(outcome.persisted, true);
+  assert.equal(outcome.degraded, true);
+  assert.deepEqual(storage.data[CHAT], [7], "the reduced snapshot was retried after candidate eviction");
+  assert.deepEqual(outcome.finalValues[CHAT], [7]);
+  assert.deepEqual(outcome.finalValues[CANDIDATE], { code: "", baseCode: "" });
 }
 
 // Give up: every write fails, so nothing is persisted and callers notify.
@@ -171,9 +213,29 @@ function createFakeStorage(initial = {}) {
     candidateKey: CANDIDATE
   });
   assert.equal(outcome.persisted, false);
-  assert.equal(outcome.finalValue, null);
+  assert.equal(outcome.degraded, true, "the attempted candidate reduction is still reported");
+  assert.deepEqual(outcome.finalValues, {}, "nothing was stored, so nothing is resynced");
   assert.ok(outcome.evictions.includes("chat-history-halved"));
   assert.ok(outcome.evictions.includes("candidate-meta-only"));
+}
+
+// No candidate at all and the chat cannot shrink further: give up cleanly
+// without claiming a degraded candidate.
+{
+  const storage = createFakeStorage();
+  storage.setRejector(() => true);
+  const outcome = await setWithQuotaEviction(storage, {
+    targetKey: CHAT,
+    targetValue: [1],
+    chatKey: CHAT,
+    candidateKey: CANDIDATE
+  });
+  assert.deepEqual(outcome, {
+    persisted: false,
+    degraded: false,
+    evictions: [],
+    finalValues: {}
+  });
 }
 
 // isQuotaExceededError recognizes both chrome.storage quota failure shapes and

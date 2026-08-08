@@ -571,11 +571,11 @@ function persistChatHistory() {
       candidateKey: CODE_CANDIDATE_KEY
     }))
     .then((outcome) => {
-      if (!outcome.persisted) throw new Error("本地存储空间不足，对话记录未能保存");
-      if (outcome.evictions.length) {
-        console.warn("为腾出本地存储空间已裁剪数据：", outcome.evictions.join(", "));
-        chatHistory = sanitizeChatHistory(outcome.finalValue);
-        setStatus("本地存储空间紧张，已自动裁剪较早的聊天记录", "error");
+      applyStorageEvictionOutcome(outcome);
+      if (!outcome.persisted) {
+        const error = new Error("本地存储空间不足，对话记录未能保存");
+        error.persistNotified = true;
+        throw error;
       }
     });
   return chatHistoryWrite;
@@ -747,13 +747,59 @@ function persistCandidate() {
       candidateKey: CODE_CANDIDATE_KEY
     }))
     .then((outcome) => {
-      if (!outcome.persisted) throw new Error("本地存储空间不足，代码候选未能保存");
-      if (outcome.evictions.length) {
-        console.warn("为腾出本地存储空间已裁剪数据：", outcome.evictions.join(", "));
-        setStatus("本地存储空间紧张，已自动裁剪较早的数据以保存代码卡", "error");
+      applyStorageEvictionOutcome(outcome);
+      if (!outcome.persisted) {
+        const error = new Error(outcome.degraded
+          ? "本地存储空间不足，代码候选仅保留了元信息，完整代码卡未保存"
+          : "本地存储空间不足，代码候选未能保存");
+        error.persistNotified = true;
+        throw error;
       }
     });
   return candidateWrite;
+}
+
+// Applies one eviction outcome to all affected in-memory state and shows a
+// single visible notice: finalValues is the source of truth for what actually
+// landed on disk, so the chat transcript and its DOM are resynced whenever
+// eviction trimmed them (M5), and a degraded candidate is never reported as
+// saved.
+function applyStorageEvictionOutcome(outcome) {
+  if (!outcome) return;
+  const finalValues = outcome.finalValues || {};
+  if (outcome.evictions.includes("chat-history-halved")
+    && Object.prototype.hasOwnProperty.call(finalValues, CHAT_HISTORY_KEY)) {
+    resyncEvictedChatHistory(finalValues[CHAT_HISTORY_KEY]);
+  }
+  if (!outcome.evictions.length && !outcome.degraded) return;
+  console.warn("为腾出本地存储空间已裁剪数据：", outcome.evictions.join(", "));
+  if (outcome.degraded && finalValues[CODE_CANDIDATE_KEY] && !String(finalValues[CODE_CANDIDATE_KEY].code || "")) {
+    setStatus("本地存储空间不足，代码卡已降级为仅元信息，未完整保存", "error");
+    return;
+  }
+  if (outcome.evictions.includes("candidate-meta-only")) {
+    setStatus("本地存储空间紧张，代码卡已降级为仅元信息以保全对话记录", "error");
+    return;
+  }
+  setStatus("本地存储空间紧张，已自动裁剪较早的数据", "error");
+}
+
+// Eviction trimmed persisted chat entries: keep the in-memory history, the
+// rendered conversation and the orchestrator's send window aligned with what
+// survived on disk.
+function resyncEvictedChatHistory(entries) {
+  chatHistory = sanitizeChatHistory(entries);
+  const retained = new Set(chatHistory.map((entry) => entry.id));
+  for (const node of elements.conversation.querySelectorAll("[data-chat-id]")) {
+    if (!retained.has(node.dataset.chatId)) node.remove();
+  }
+  orchestrator.setDirectConversation(alignConversationToUser(
+    chatHistory
+      .filter((entry) => entry.purpose === "direct" && ["user", "assistant"].includes(entry.role))
+      .map((entry) => ({ role: entry.role, content: entry.text }))
+      .slice(-12)
+  ));
+  syncConversationEmptyState();
 }
 
 // Throttled, visible degradation for failed local persistence: log the cause,
@@ -764,6 +810,7 @@ const PERSIST_FAILURE_NOTIFY_COOLDOWN_MS = 10000;
 
 function reportPersistFailure(kind, error) {
   console.error(`本地保存失败（${kind}），仅保留在当前会话：`, error);
+  if (error?.persistNotified) return;
   const now = Date.now();
   const last = persistFailureNotifiedAt.get(kind);
   if (typeof last === "number" && now - last < PERSIST_FAILURE_NOTIFY_COOLDOWN_MS) return;
