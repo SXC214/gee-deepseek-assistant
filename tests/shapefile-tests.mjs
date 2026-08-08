@@ -47,6 +47,12 @@ function pointContent(x, y) {
   return buf;
 }
 
+function nullContent() {
+  const buf = Buffer.alloc(4);
+  buf.writeInt32LE(0, 0);
+  return buf;
+}
+
 function pointZContent(x, y, z) {
   const buf = Buffer.alloc(28);
   buf.writeInt32LE(11, 0);
@@ -404,6 +410,28 @@ assert.equal(SHP_CLOUD_DIRECT_MAX_BYTES, 8 * 1024 * 1024);
   assert.equal(result.featureCount, 2);
   assert.deepEqual(result.geoJson.features[0].properties, { NAME: "a" });
   assert.deepEqual(result.geoJson.features[1].properties, { NAME: null });
+}
+
+// ---------- null shapes keep attribute alignment ----------
+
+{
+  // DBF rows map 1:1 onto SHP records; a Null shape still consumes its row,
+  // so later features must read later rows, not features.length.
+  const fields = [{ name: "NAME", type: "C", length: 4 }];
+  const dbf = buildDbf(fields, [
+    { values: [utf8Field("a", 4)] },
+    { values: [utf8Field("x", 4)] },
+    { values: [utf8Field("b", 4)] }
+  ]);
+  const result = await parseShapefileToGeoJson({
+    shp: toArrayBuffer(buildShp(1, [pointContent(0, 0), nullContent(), pointContent(2, 2)])),
+    dbf: toArrayBuffer(dbf)
+  });
+  assert.equal(result.featureCount, 2, "the Null shape yields no feature");
+  assert.deepEqual(result.geoJson.features[0].properties, { NAME: "a" });
+  assert.deepEqual(result.geoJson.features[0].geometry.coordinates, [0, 0]);
+  assert.deepEqual(result.geoJson.features[1].properties, { NAME: "b" }, "rows after a Null shape stay aligned");
+  assert.deepEqual(result.geoJson.features[1].geometry.coordinates, [2, 2]);
 }
 
 // ---------- .prj gating ----------
