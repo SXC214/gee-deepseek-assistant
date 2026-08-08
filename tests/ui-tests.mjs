@@ -157,6 +157,30 @@ assert.ok(
 assert.match(orchestratorScript, /function drainMessageQueue\(\)/);
 assert.match(script, /enqueuePrompt\(prompt, planRequest\)/);
 assert.match(orchestratorScript, /queuePaused = true/);
+// ISS-010 regression guard: the turn-state badge wording derives from one
+// helper that every queue render (remove/edit/priority/clear/restore/drain)
+// and every busy toggle shares, so deleting a queued message while idle can
+// never leave a stale "N 条待发送" label.
+assert.match(script, /function refreshTurnStateBadge\(\)/);
+assert.match(
+  script,
+  /elements\.turnStateBadge\.textContent = busy \? "处理中" : queuedCount \? `\$\{queuedCount\} 条待发送` : "就绪"/
+);
+const renderMessageQueueBody = script.slice(
+  script.indexOf("function renderMessageQueue()"),
+  script.indexOf("function handleQueueAction")
+);
+assert.ok(
+  /refreshTurnStateBadge\(\)/.test(renderMessageQueueBody),
+  "renderMessageQueue must refresh the turn-state badge on every queue change"
+);
+const setBusyBody = script.slice(script.indexOf("function setBusy(value)"), script.indexOf("function setStatus("));
+assert.ok(/refreshTurnStateBadge\(\)/.test(setBusyBody), "setBusy must reuse the shared badge refresh helper");
+assert.doesNotMatch(
+  setBusyBody,
+  /orchestrator\.getQueue\(\)\.length \?/,
+  "setBusy must not inline its own badge wording"
+);
 assert.equal(manifest.version, "0.4.0");
 assert.ok(manifest.permissions.includes("clipboardWrite"));
 assert.ok(manifest.permissions.includes("unlimitedStorage"));

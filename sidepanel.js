@@ -709,6 +709,10 @@ function renderMessageQueue() {
   elements.queuePanel.classList.toggle("hidden", queuedMessages.length === 0);
   elements.queueCount.textContent = queuedMessages.length ? `(${queuedMessages.length})` : "";
   elements.resumeQueueButton.classList.toggle("hidden", !queuePaused || queuedMessages.length === 0);
+  // ISS-010: every queue change (remove/edit/priority/clear/restore/drain)
+  // flows through this render, so the badge must follow it too instead of
+  // waiting for the next busy toggle.
+  refreshTurnStateBadge();
 
   queuedMessages.forEach((item, index) => {
     const card = document.createElement("article");
@@ -1791,13 +1795,20 @@ function scrollConversationToEnd({ force = false, smooth = false } = {}) {
   return true;
 }
 
+// ISS-010: single source of truth for the turn-state badge wording so queue
+// changes and busy toggles never diverge.
+function refreshTurnStateBadge() {
+  const queuedCount = orchestrator.getQueue().length;
+  elements.turnStateBadge.textContent = busy ? "处理中" : queuedCount ? `${queuedCount} 条待发送` : "就绪";
+}
+
 function setBusy(value) {
   busy = value;
   elements.sendButton.disabled = !initialized;
   elements.sendButton.textContent = value ? "排队" : "发送";
   elements.stopButton.classList.toggle("hidden", !value);
   elements.readButton.disabled = value;
-  elements.turnStateBadge.textContent = value ? "处理中" : orchestrator.getQueue().length ? `${orchestrator.getQueue().length} 条待发送` : "就绪";
+  refreshTurnStateBadge();
   elements.turnStateBadge.classList.toggle("muted", !value);
   elements.turnStateBadge.classList.toggle("processing", value);
   syncPlanModeUi();
