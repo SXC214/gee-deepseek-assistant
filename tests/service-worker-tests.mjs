@@ -1126,8 +1126,7 @@ assert.equal(geeAssets.requestId, "gee-assets");
 assert.equal(geeAssets.nextPageToken, "page-2");
 assert.deepEqual(geeAssets.items[0], { id: "projects/gee proj/assets/ndvi", name: "ndvi", type: "IMAGE_COLLECTION" });
 assert.equal(geeAssets.items[1].type, "UNKNOWN", "missing asset fields get defaults");
-assert.match(geeUrls[0], /\/projects\/gee%20proj\/assets\?/);
-assert.match(geeUrls[0], /pageSize=100/);
+assert.equal(geeUrls[0], "https://earthengine.googleapis.com/v1/projects/gee%20proj/assets", "no pageSize query (server rejects it)");
 assert.equal(geeAuthFlowCalls, 1, "first REST call authorizes once");
 
 // Session-cached token: follow-up requests skip the auth flow.

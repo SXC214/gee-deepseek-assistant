@@ -98,6 +98,7 @@ function mockResponse(status, body = "") {
 }
 
 // ---- listAssets: URL encoding, auth header, pagination parsing.
+// The assets endpoint rejects pageSize (400), so only pageToken rides along.
 {
   const calls = [];
   globalThis.fetch = async (url, options) => {
@@ -112,13 +113,15 @@ function mockResponse(status, body = "") {
   };
   const result = await listAssets("tok-1", "my proj", "prev-token");
   assert.equal(calls.length, 1);
-  assert.ok(calls[0].url.startsWith(`${GEE_REST_BASE}/projects/my%20proj/assets?`), "project is URL-encoded");
-  assert.match(calls[0].url, /pageSize=100/);
-  assert.match(calls[0].url, /pageToken=prev-token/);
+  assert.equal(calls[0].url, `${GEE_REST_BASE}/projects/my%20proj/assets?pageToken=prev-token`, "project is URL-encoded, pageToken only");
+  assert.ok(!/pageSize/.test(calls[0].url), "pageSize is never sent (server rejects it)");
   assert.equal(calls[0].options.headers.Authorization, "Bearer tok-1");
   assert.equal(result.nextPageToken, "next-1");
   assert.deepEqual(result.items[0], { id: "projects/p/assets/ndvi", name: "ndvi", type: "IMAGE_COLLECTION" });
   assert.deepEqual(result.items[1], { id: "projects/p/assets/legacy/table1", name: "table1", type: "TABLE" });
+
+  await listAssets("tok-1", "my proj");
+  assert.equal(calls[1].url, `${GEE_REST_BASE}/projects/my%20proj/assets`, "no query string without a pageToken");
 }
 
 // ---- listTasks: pageSize=50, optional pageToken and tolerant normalization.
