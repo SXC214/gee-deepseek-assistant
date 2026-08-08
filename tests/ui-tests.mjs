@@ -166,6 +166,8 @@ assert.match(html, /id="geeAssetList"/);
 assert.match(html, /id="geeTaskList"/);
 assert.match(html, /id="geeAssetMoreButton"[^>]*hidden/);
 assert.match(html, /加载下一页/);
+assert.match(html, /id="geeAssetError"/);
+assert.match(html, /id="geeTaskError"/);
 assert.match(script, /elements\.geeClientId\.value = currentSettings\.geeClientId \|\| ""/);
 assert.match(script, /geeClientId: elements\.geeClientId\.value/);
 assert.match(script, /chrome\.identity\.getRedirectURL\(\)/);
@@ -176,6 +178,14 @@ assert.match(script, /elements\.prompt\.value = current \? `\$\{current\}\\n\$\{
 assert.match(script, /async function refreshGeeRest\(\)/);
 assert.match(script, /async function loadGeeAssets\(pageToken = ""\)/);
 assert.match(script, /async function loadGeeTasks\(\)/);
+// Assets and tasks keep independent loading/error state (m6): separate
+// loading flags, per-column error surfaces, and a refresh that clears both.
+assert.match(script, /let geeAssetLoading = false;/);
+assert.match(script, /let geeTaskLoading = false;/);
+assert.match(script, /function setGeeColumnError\(kind, message\)/);
+assert.match(script, /setGeeColumnError\("assets", `资产加载失败：\$\{safeError\(error\)\}`\)/);
+assert.match(script, /setGeeColumnError\("tasks", `任务加载失败：\$\{safeError\(error\)\}`\)/);
+assert.match(script, /setGeeColumnError\("assets", ""\);[\s\S]*setGeeColumnError\("tasks", ""\);[\s\S]*renderGeeAssets\(\);[\s\S]*renderGeeTasks\(\);/);
 assert.match(styles, /\.gee-rest-panel\s*\{/);
 assert.match(styles, /\.gee-rest-item-type\s*\{/);
 assert.match(styles, /\.gee-redirect-uri\s*\{/);

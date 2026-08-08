@@ -338,7 +338,8 @@ async function clearKey() {
 let geeAssetItems = [];
 let geeTaskItems = [];
 let geeAssetNextToken = "";
-let geeRestLoading = false;
+let geeAssetLoading = false;
+let geeTaskLoading = false;
 
 function renderGeeRedirectUri() {
   try {
@@ -384,18 +385,39 @@ function setGeeRestStatus(message) {
   elements.geeRestStatus.classList.toggle("hidden", !message);
 }
 
+// Assets and tasks keep independent loading/error state: a task success must
+// never blank an asset error and an asset failure must never hide task rows.
+function geeRestBusy() {
+  return geeAssetLoading || geeTaskLoading;
+}
+
+function syncGeeRestRefreshButton() {
+  elements.geeRestRefreshButton.disabled = geeRestBusy();
+}
+
+function setGeeColumnError(kind, message) {
+  const element = kind === "tasks" ? elements.geeTaskError : elements.geeAssetError;
+  element.textContent = message;
+  element.classList.toggle("hidden", !message);
+}
+
 // Sequential on purpose: the first call may open the interactive auth flow,
-// and the second one reuses the session-cached token.
+// and the second one reuses the session-cached token. Refresh first clears
+// both lists and both column errors so stale rows never survive a reload.
 async function refreshGeeRest() {
   geeAssetItems = [];
   geeAssetNextToken = "";
+  geeTaskItems = [];
+  setGeeColumnError("assets", "");
+  setGeeColumnError("tasks", "");
   renderGeeAssets();
+  renderGeeTasks();
   await loadGeeAssets("");
   await loadGeeTasks();
 }
 
 async function loadGeeAssets(pageToken = "") {
-  if (geeRestLoading) return;
+  if (geeAssetLoading) return;
   if (!geeRestConfigured()) {
     setGeeRestGuide(GEE_REST_GUIDE);
     setGeeRestStatus("");
@@ -403,9 +425,9 @@ async function loadGeeAssets(pageToken = "") {
     return;
   }
   setGeeRestGuide("");
-  geeRestLoading = true;
-  elements.geeRestRefreshButton.disabled = true;
-  setGeeRestStatus(pageToken ? "正在加载下一页资产…" : "正在授权并加载资产 / 任务…");
+  geeAssetLoading = true;
+  syncGeeRestRefreshButton();
+  setGeeRestStatus(pageToken ? "正在加载下一页资产…" : "正在授权并加载资产…");
   try {
     const response = await chrome.runtime.sendMessage({
       type: "GEE_REST_LIST_ASSETS",
@@ -414,29 +436,31 @@ async function loadGeeAssets(pageToken = "") {
     if (!response?.ok) throw new Error(response?.error || "加载资产失败");
     geeAssetItems = pageToken ? [...geeAssetItems, ...response.items] : response.items;
     geeAssetNextToken = response.nextPageToken || "";
+    setGeeColumnError("assets", "");
     renderGeeAssets();
     setGeeRestStatus("");
   } catch (error) {
     if (/请先在设置中填写/.test(safeError(error))) {
       setGeeRestGuide(GEE_REST_GUIDE);
-      setGeeRestStatus("");
     } else {
-      setGeeRestStatus(`加载失败：${safeError(error)}`);
+      setGeeColumnError("assets", `资产加载失败：${safeError(error)}`);
     }
+    setGeeRestStatus("");
   } finally {
-    geeRestLoading = false;
-    elements.geeRestRefreshButton.disabled = false;
+    geeAssetLoading = false;
+    syncGeeRestRefreshButton();
   }
 }
 
 async function loadGeeTasks() {
-  if (geeRestLoading) return;
+  if (geeTaskLoading) return;
   if (!geeRestConfigured()) {
     renderGeeTasks();
     return;
   }
-  geeRestLoading = true;
-  elements.geeRestRefreshButton.disabled = true;
+  geeTaskLoading = true;
+  syncGeeRestRefreshButton();
+  setGeeRestStatus(geeAssetLoading ? "正在加载资产 / 任务…" : "正在加载任务…");
   try {
     const response = await chrome.runtime.sendMessage({
       type: "GEE_REST_LIST_TASKS",
@@ -444,17 +468,19 @@ async function loadGeeTasks() {
     });
     if (!response?.ok) throw new Error(response?.error || "加载任务失败");
     geeTaskItems = response.items;
+    setGeeColumnError("tasks", "");
     renderGeeTasks();
     setGeeRestStatus("");
   } catch (error) {
     if (/请先在设置中填写/.test(safeError(error))) {
       setGeeRestGuide(GEE_REST_GUIDE);
     } else {
-      setGeeRestStatus(`加载失败：${safeError(error)}`);
+      setGeeColumnError("tasks", `任务加载失败：${safeError(error)}`);
     }
+    setGeeRestStatus("");
   } finally {
-    geeRestLoading = false;
-    elements.geeRestRefreshButton.disabled = false;
+    geeTaskLoading = false;
+    syncGeeRestRefreshButton();
   }
 }
 
