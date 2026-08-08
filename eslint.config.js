@@ -26,7 +26,9 @@ const extensionGlobals = {
 
 const baseRules = {
   "no-unused-vars": "warn",
-  "no-undef": "warn",
+  // Undefined globals are the one class of merge-breaking mistakes that must
+  // never land, so this stays an error while style rules remain warnings.
+  "no-undef": "error",
   eqeqeq: "warn",
   "no-var": "warn"
 };
