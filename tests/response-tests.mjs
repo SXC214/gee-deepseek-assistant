@@ -31,6 +31,30 @@ assert.equal(
   "last"
 );
 
+// A complete script followed by a short usage example: scoring (GEE signal
+// +2, substantial length +1, last position only breaks ties) must keep the
+// complete script instead of the trailing one-liner.
+const fullScript = [
+  "var image = ee.Image('LANDSAT/LC08/C02/T1_L2/LC08_044034_20140318');",
+  "var ndvi = image.normalizedDifference(['SR_B5', 'SR_B4']).rename('NDVI');",
+  "Map.addLayer(ndvi, { min: 0, max: 1 }, 'NDVI');",
+  "Map.centerObject(image, 9);"
+].join("\n");
+const usageExample = "Map.addLayer(ndvi);";
+assert.equal(
+  extractCodeCandidate(`完整脚本：\n\`\`\`javascript\n${fullScript}\n\`\`\`\n用法：\n\`\`\`js\n${usageExample}\n\`\`\``),
+  fullScript
+);
+
+// Tie-break by position still applies among equally scored GEE blocks even
+// when one of them is substantial: equal score means the later block wins.
+const longDraft = `${fullScript}\nprint('draft');`;
+const longFinal = `${fullScript}\nprint('final');`;
+assert.equal(
+  extractCodeCandidate(`草稿：\n\`\`\`js\n${longDraft}\n\`\`\`\n终稿：\n\`\`\`js\n${longFinal}\n\`\`\``),
+  longFinal
+);
+
 // Unfenced fallback paths are unaffected.
 assert.equal(
   extractCodeCandidate("下面是完整脚本：\nvar image = ee.Image('X');\nMap.addLayer(image);"),
