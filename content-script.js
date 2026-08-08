@@ -79,6 +79,24 @@
       return false;
     }
 
+    if (message.type === "SHP_GET_UPLOAD_URL") {
+      requestBridge("SHP_GET_UPLOAD_URL", {}, 15000).then(
+        (result) => sendResponse({ ok: true, result }),
+        (error) => sendResponse({ ok: false, error: safeError(error) })
+      );
+      return true;
+    }
+
+    if (message.type === "SHP_UPLOAD_BLOB") {
+      // Byte uploads carry full file contents and can take a while; relax
+      // the bridge timeout accordingly.
+      requestBridge("SHP_UPLOAD_BLOB", message.payload || {}, 60000).then(
+        (result) => sendResponse({ ok: true, result }),
+        (error) => sendResponse({ ok: false, error: safeError(error) })
+      );
+      return true;
+    }
+
     return false;
   });
 

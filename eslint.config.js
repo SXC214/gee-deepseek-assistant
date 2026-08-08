@@ -89,7 +89,9 @@ export default [
         document: "readonly",
         navigator: "readonly",
         MutationObserver: "readonly",
-        CustomEvent: "readonly"
+        CustomEvent: "readonly",
+        FormData: "readonly",
+        Blob: "readonly"
       }
     },
     rules: baseRules
@@ -107,7 +109,9 @@ export default [
         Buffer: "readonly",
         DOMException: "readonly",
         Response: "readonly",
-        Headers: "readonly"
+        Headers: "readonly",
+        FormData: "readonly",
+        Blob: "readonly"
       }
     },
     rules: baseRules
