@@ -111,6 +111,17 @@
 - 所在层：UI 层（sidepanel.js：徽标文案仅在 setBusy 中内联计算，队列变更路径 renderMessageQueue 未同步刷新徽标）
 - 状态：已修复
 
+### ISS-011 上传 Shapefile 功能交付记录（含云端上传可行性调研结论与安全边界修订）
+- 编号：ISS-011
+- 标题：上传 Shapefile 功能交付记录（含云端上传可行性调研结论与安全边界修订）
+- 现象：（功能记录，非缺陷）侧栏「资产 / 任务」面板头部新增「上传 Shapefile」入口，支持把整套 shapefile（必需 `.shp`/`.shx`/`.dbf`，可选 `.prj`/`.cpg`）入库为云端 Table 资产；云端不可用时经确认后降级为本地 GeoJSON 条目（「SHP·本地」），仍可注入脚本与注入对话。
+- 复现步骤：（使用步骤）点击「上传 Shapefile」→ 选择一整套 shapefile → 满足云端条件（Code Editor 页面 + 已配置 OAuth 客户端与项目）时自动走云端直传，否则经确认后走本地解析降级。
+- 控制台报错：无（同名云端资产冲突时上传报错提示改名，属预期行为）
+- 所在层：UI 层（sidepanel.js）、页面桥接层（page-bridge.js 字节暂存通道）、服务层（service-worker.js）、共享库层（lib/shapefile.js 本地解析、lib/gee-rest.js 资产入库）
+- 状态：已验证
+- 调研结论与取舍：公开 Earth Engine REST 接口不支持字节直传入库（无公开 multipart 上传端点），Code Editor 页面的字节上传通道（`geturl` + `_ah/upload`）为会话鉴权且未文档化；因此方案取舍为——字节暂存段借用页面会话（与脚本注入同一 MAIN world 桥接机制），入库段调用公开标准 `table:import` REST（扩展自有 `earthengine` 范围 Bearer 令牌），形成「云端主路径 + 本地降级」双路径。
+- 风险与边界：暂存通道属未文档化接口，可能随 Google 变更失效，失效时功能自动引导降级；用户已明确批准修订 README 安全边界（原「绝不复用网页令牌/Cookie/XSRF」）：扩展不存储、不导出、不读取任何 Cookie/XSRF 凭证明文，仅在页面内发起带凭证请求。上限：云端直传整套 8MB；本地解析整套 32MB、要素 50000、注入片段 1MB；仅 2D 点/线/面（Z 降维）、dBase III 属性；`.prj` 非 EPSG:4326 拒绝（不重投影）。详见 README「上传 Shapefile」「安全边界」「已知限制」各节。
+
 ---
 
 ## 审核闭环记录

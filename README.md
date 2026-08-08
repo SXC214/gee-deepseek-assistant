@@ -26,6 +26,7 @@
 - 模型处理期间仍可继续发送要求。消息会进入可编辑、可删除和可调整优先级的后续队列；停止当前任务会暂停而不会清空队列。
 - 顶部“＋”用于开始新对话；会先确认，再清除当前聊天、计划、代码卡和后续队列，不影响 GEE 编辑器脚本。
 - Earth Engine REST 直连：配置独立 OAuth 客户端后，可在侧边栏浏览项目资产与任务、复制资产 ID 并注入对话；令牌只保存在浏览器会话中。
+- 上传 Shapefile：在「资产 / 任务」面板把整套 shapefile（必需 `.shp`/`.shx`/`.dbf`，可选 `.prj`/`.cpg`）入库为云端 Table 资产；云端不可用时经确认后降级为本地 GeoJSON 条目，仍可注入脚本与对话。
 
 ## 安装
 
@@ -72,15 +73,29 @@ DeepSeek 默认 API 地址为 `https://api.deepseek.com`。扩展会调用其 `/
 
 未完成计划保存在 `chrome.storage.local`，关闭或重启浏览器后可以恢复。保存内容只包括原始需求、用户答复、官方来源和结构化方案，不包括完整编辑器代码、Console、API Key 或思考过程。对话窗口另外保存经过长度限制和常见密钥脱敏的可见文字记录，思考过程不会进入其中；点击顶部“＋”可开始新对话，点击“取消计划”只删除当前计划。后续消息队列也会本地保存并经过同样的常见密钥脱敏。
 
+### 上传 Shapefile
+
+点击侧栏「资产 / 任务」面板头部「刷新」旁的「上传 Shapefile」按钮，选择一整套 shapefile 文件（必需 `.shp`、`.shx`、`.dbf`，可选 `.prj`、`.cpg`）。扩展按以下两条路径处理：
+
+1. **云端直传（主路径）**：当处于 Code Editor 页面且已完成 REST 直连的 OAuth 客户端与项目配置时，扩展先经页面桥接借用页面会话把文件字节暂存到 Google 后端（与「注入脚本 / 读取状态」同一 MAIN world 桥接机制），再用扩展自有的 `earthengine` 范围 OAuth 令牌调用公开的 `table:import` REST 接口，把暂存字节入库为云端 Table 资产。成功后资产出现在资产列表中，可直接使用既有的「复制 ID」与「注入对话」。整套文件直传上限 8MB。
+2. **本地降级路径**：云端不可用（不在编辑器页面、未完成配置或上传失败）时，经用户确认后扩展在本地解析 shapefile 为 GeoJSON，保存为「SHP·本地」条目：支持注入脚本（生成内联 `ee.FeatureCollection`）与注入对话（摘要标记）。
+
+使用限制：
+
+- 云端直传整套上限 8MB；本地解析整套上限 32MB、要素数不超过 50000、生成的注入片段不超过 1MB。
+- 只支持 2D 点、线、面几何（带 Z 值的几何会降维处理）；属性仅支持 dBase III 格式。
+- `.prj` 声明非 EPSG:4326 的文件会被拒绝，扩展不做重投影；`.cpg` 用于声明属性编码，缺省按 UTF-8 解析。
+- 同名云端资产已存在时上传会报错，请改名后重试。
+
 ## Earth Engine API 说明
 
-当前版本复用 Code Editor 自身已经完成的 Earth Engine 登录和运行环境，仅通过编辑器写入代码并由用户触发 Run；它不会读取登录 Cookie、OAuth token 或 XSRF token。
+当前版本复用 Code Editor 自身已经完成的 Earth Engine 登录和运行环境，仅通过编辑器写入代码并由用户触发 Run；它不会把登录 Cookie、OAuth token 或 XSRF token 读取进扩展存储或传出页面。唯一例外是 Shapefile 云端上传的字节暂存段：该操作在 Code Editor 页面上下文内借用页面会话完成，详见下文「安全边界」。
 
 “Earth Engine Project ID”会作为模型上下文，帮助模型生成适用于该项目的代码；它同时也是 REST 直连的目标项目。
 
 ### REST 直连（资产 / 任务）
 
-本功能使用完全独立的 Google OAuth 客户端：不读取、不复用、不提取 Code Editor 的登录状态或网页令牌，只通过 `chrome.identity` 弹窗经用户授权获得 `https://www.googleapis.com/auth/earthengine` 范围的短期令牌。
+本功能使用完全独立的 Google OAuth 客户端：不读取、不复用、不提取 Code Editor 的登录状态或网页令牌，只通过 `chrome.identity` 弹窗经用户授权获得 `https://www.googleapis.com/auth/earthengine` 范围的短期令牌。唯一例外是 Shapefile 云端上传的字节暂存段，见下文说明。
 
 配置步骤：
 
@@ -93,7 +108,7 @@ DeepSeek 默认 API 地址为 `https://api.deepseek.com`。扩展会调用其 `/
 已知限制：
 
 - 未打包（开发者模式加载）的扩展 ID 可能在重新安装或更换浏览器后变化，导致重定向 URI 改变；届时需要在 Google Cloud Console 更新该 OAuth 客户端的重定向 URI。
-- REST 直连目前只提供资产与任务的只读浏览，不会写入资产、发起导出或以扩展身份执行任何 Earth Engine 计算。
+- REST 直连以资产与任务的只读浏览为主；写入仅支持「上传 Shapefile」经公开的 `table:import` 接口入库云端 Table 资产，不会发起导出或以扩展身份执行任何 Earth Engine 计算。入库前的字节暂存段借用 Code Editor 页面会话完成（与脚本注入同一 MAIN world 桥接机制，详见「安全边界」），入库段使用扩展自有 `earthengine` 范围的 Bearer 令牌。
 - OAuth 同意屏幕处于“测试”状态时，Google 签发的访问令牌有效期受限（约 7 天）；过期后扩展会重新弹出授权窗口，重新授权即可，属预期行为。
 
 ## 安全边界
@@ -105,6 +120,7 @@ DeepSeek 默认 API 地址为 `https://api.deepseek.com`。扩展会调用其 `/
 - 多人或生产部署建议让扩展调用自建后端，由后端保管模型供应商密钥。
 - 模型生成的代码可能创建导出任务或产生计算用量，因此扩展不会自动运行代码。
 - 长期计划可能包含研究区域和分析需求；共享浏览器配置前请先取消计划并清除本地数据。
+- Shapefile 云端上传的字节暂存段会在 Code Editor 页面上下文内借用页面会话完成（与脚本注入同一 MAIN world 桥接机制）：扩展不存储、不导出、不读取任何 Cookie / XSRF 凭证的明文，只在页面内发起带凭证的暂存请求；这意味着该段操作以当前登录账号的身份与权限执行。随后的入库段为标准公开 REST 接口（`table:import`），使用扩展自有 `earthengine` 范围的 Bearer 令牌；暂存通道本身为未文档化接口，可能随 Google 变更失效（详见「已知限制」）。
 
 ## 页面兼容性
 
@@ -122,6 +138,8 @@ Earth Engine 没有公开的 Code Editor 插件接口。如果 Google 更新页�
 - 未打包（开发者模式加载）的扩展 ID 可能变化，届时需同步更新 GEE REST 直连 OAuth 客户端的重定向 URI（详见上文“REST 直连”一节的已知限制）。
 - `compatibleStreaming` 是实验性开关：启用后对 OpenAI 兼容端点使用普通流式，但该路径不解析思考内容。
 - Dataset Search 与 Docs Search 依赖 `developers.google.com` 可达；该站点不可达时检索功能无法使用。
+- Shapefile 云端上传的字节暂存通道（`geturl` / `_ah/upload`）是未文档化接口，可能随 Google 变更而失效；失效时功能会自动引导降级到本地解析路径。
+- Shapefile 上传各项上限：云端直传整套 8MB；本地解析整套 32MB、要素数 50000、注入片段 1MB；仅支持 2D 点/线/面（Z 值降维）与 dBase III 属性；`.prj` 非 EPSG:4326 会直接拒绝，不做重投影。
 
 ## 开发与测试
 
