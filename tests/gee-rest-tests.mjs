@@ -4,9 +4,12 @@ import {
   GEE_AUTH_ENDPOINT,
   GEE_AUTH_SCOPE,
   GEE_REST_BASE,
+  OAUTH_STATE_MIN_LENGTH,
   __timings,
   buildAuthUrl,
+  createOAuthState,
   parseAuthFragment,
+  verifyOAuthState,
   normalizeAsset,
   normalizeOperation,
   listAssets,
@@ -25,26 +28,48 @@ function mockResponse(status, body = "") {
   };
 }
 
-// ---- buildAuthUrl: implicit flow with the earthengine scope.
+// ---- buildAuthUrl: implicit flow with the earthengine scope and CSRF state.
 {
-  const url = new URL(buildAuthUrl("client-123.apps.googleusercontent.com", "https://abc.chromiumapp.org/"));
-  assert.equal(`${url.origin}${url.pathname}`, GEE_AUTH_ENDPOINT);
-  assert.equal(url.searchParams.get("client_id"), "client-123.apps.googleusercontent.com");
-  assert.equal(url.searchParams.get("response_type"), "token");
-  assert.equal(url.searchParams.get("scope"), GEE_AUTH_SCOPE);
-  assert.equal(url.searchParams.get("redirect_uri"), "https://abc.chromiumapp.org/");
-  assert.equal(url.searchParams.get("include_granted_scopes"), "true");
+  const { url, state } = buildAuthUrl("client-123.apps.googleusercontent.com", "https://abc.chromiumapp.org/");
+  const parsed = new URL(url);
+  assert.equal(`${parsed.origin}${parsed.pathname}`, GEE_AUTH_ENDPOINT);
+  assert.equal(parsed.searchParams.get("client_id"), "client-123.apps.googleusercontent.com");
+  assert.equal(parsed.searchParams.get("response_type"), "token");
+  assert.equal(parsed.searchParams.get("scope"), GEE_AUTH_SCOPE);
+  assert.equal(parsed.searchParams.get("redirect_uri"), "https://abc.chromiumapp.org/");
+  assert.equal(parsed.searchParams.get("include_granted_scopes"), "true");
+  assert.equal(parsed.searchParams.get("state"), state, "the generated state rides along in the URL");
+  assert.match(state, /^[0-9a-f]{64}$/, "state is 32 random bytes rendered as hex");
+  assert.notEqual(state, buildAuthUrl("client", "https://x/").state, "every request gets fresh state");
+  assert.equal(buildAuthUrl("client", "https://x/", "fixed-state").state, "fixed-state", "callers may pin state");
   assert.throws(() => buildAuthUrl("", "https://x/"), /客户端 ID/);
   assert.throws(() => buildAuthUrl("client", ""), /重定向 URI/);
 }
 
-// ---- parseAuthFragment: token extraction, defaults and error fragments.
+// ---- OAuth state generation and constant-time verification.
 {
-  const parsed = parseAuthFragment("https://abc.chromiumapp.org/#access_token=ya29.tok&expires_in=3599&token_type=Bearer");
+  const state = createOAuthState();
+  assert.match(state, /^[0-9a-f]{64}$/);
+  assert.equal(state.length >= OAUTH_STATE_MIN_LENGTH, true);
+  assert.notEqual(state, createOAuthState());
+  assert.equal(verifyOAuthState(state, state), true);
+  assert.equal(verifyOAuthState(state, `${state.slice(0, -1)}0`), false, "one flipped nibble fails");
+  assert.equal(verifyOAuthState(state, ""), false, "missing callback state fails");
+  assert.equal(verifyOAuthState(state, `${state}00`), false, "length mismatch fails");
+  assert.equal(verifyOAuthState("short", "short"), false, "low-entropy state is never accepted");
+  assert.equal(verifyOAuthState(null, state), false);
+  assert.equal(verifyOAuthState(state, null), false);
+}
+
+// ---- parseAuthFragment: token extraction, defaults, state and error fragments.
+{
+  const parsed = parseAuthFragment("https://abc.chromiumapp.org/#access_token=ya29.tok&expires_in=3599&token_type=Bearer&state=abc123");
   assert.equal(parsed.accessToken, "ya29.tok");
   assert.equal(parsed.expiresIn, 3599);
+  assert.equal(parsed.state, "abc123");
   const fallback = parseAuthFragment("https://abc.chromiumapp.org/#access_token=only-token");
   assert.equal(fallback.expiresIn, 3600);
+  assert.equal(fallback.state, "", "absent state surfaces as an empty string for the verifier");
   assert.throws(() => parseAuthFragment("https://abc.chromiumapp.org/#error=access_denied"), /授权失败/);
   assert.throws(() => parseAuthFragment("https://abc.chromiumapp.org/#token_type=Bearer"), /access_token/);
 }
@@ -180,6 +205,9 @@ const localData = {
 const sessionData = {};
 let authFlowCalls = 0;
 let authFlowUrls = [];
+// When non-null, the fake auth flow returns this state instead of echoing the
+// request's state, letting tests exercise CSRF rejection paths.
+let authFlowStateOverride = null;
 globalThis.chrome = {
   runtime: {
     onInstalled: createEvent(),
@@ -199,7 +227,10 @@ globalThis.chrome = {
     async launchWebAuthFlow({ url }) {
       authFlowCalls += 1;
       authFlowUrls.push(url);
-      return `https://test-extension.chromiumapp.org/#access_token=flow-token-${authFlowCalls}&expires_in=3600`;
+      const requestedState = new URL(url).searchParams.get("state") || "";
+      const callbackState = authFlowStateOverride !== null ? authFlowStateOverride : requestedState;
+      const fragment = `access_token=flow-token-${authFlowCalls}&expires_in=3600${callbackState ? `&state=${callbackState}` : ""}`;
+      return `https://test-extension.chromiumapp.org/#${fragment}`;
     }
   }
 };
@@ -243,6 +274,7 @@ const assetsBody = {
   const authUrl = new URL(authFlowUrls.at(-1));
   assert.equal(authUrl.searchParams.get("client_id"), "client-id-1.apps.googleusercontent.com");
   assert.equal(authUrl.searchParams.get("redirect_uri"), "https://test-extension.chromiumapp.org/");
+  assert.match(authUrl.searchParams.get("state") || "", /^[0-9a-f]{64}$/, "the auth request carries high-entropy state");
   assert.equal(calls[0].headers.Authorization, `Bearer flow-token-${authFlowCalls}`);
   assert.equal(sessionData.geeAccessTokenV1.token, `flow-token-${authFlowCalls}`);
   assert.ok(sessionData.geeAccessTokenV1.expiresAt > Date.now());
@@ -295,6 +327,40 @@ const assetsBody = {
   assert.equal(error.message, "请先在设置中填写 Google OAuth 客户端 ID / Project ID");
   assert.equal(authFlowCalls, before, "no auth flow without configuration");
   localData.settings.geeClientId = savedClientId;
+}
+
+// CSRF guard (m1): a callback that omits the state is rejected.
+{
+  delete sessionData.geeAccessTokenV1;
+  authFlowStateOverride = "";
+  const before = authFlowCalls;
+  const error = await worker.__testing.runGeeRestCall("assets", {}).then(() => null, (failure) => failure);
+  authFlowStateOverride = null;
+  assert.equal(authFlowCalls, before + 1, "one flow ran before the callback was rejected");
+  assert.match(error.message, /state 校验未通过/, "missing callback state is refused with a readable error");
+  assert.equal(sessionData.geeAccessTokenV1, undefined, "no token is cached from a rejected callback");
+}
+
+// CSRF guard (m1): a callback whose state does not match the request is rejected.
+{
+  delete sessionData.geeAccessTokenV1;
+  authFlowStateOverride = "f".repeat(64);
+  const before = authFlowCalls;
+  const error = await worker.__testing.runGeeRestCall("assets", {}).then(() => null, (failure) => failure);
+  authFlowStateOverride = null;
+  assert.equal(authFlowCalls, before + 1);
+  assert.match(error.message, /state 校验未通过/, "mismatched callback state is refused");
+  assert.equal(sessionData.geeAccessTokenV1, undefined, "a forged callback never installs a token");
+}
+
+// After a rejected callback the auth lock is released: a normal flow succeeds again.
+{
+  delete sessionData.geeAccessTokenV1;
+  globalThis.fetch = async () => mockResponse(200, assetsBody);
+  const before = authFlowCalls;
+  const result = await worker.__testing.runGeeRestCall("assets", {});
+  assert.equal(authFlowCalls, before + 1);
+  assert.equal(result.items[0].name, "ndvi", "the lock recovers after a CSRF rejection");
 }
 
 console.log("GEE REST tests passed.");

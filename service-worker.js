@@ -9,7 +9,7 @@ import {
 import { buildChatRequestBody, isOfficialDeepSeekV4, isValidReasoningEffort } from "./lib/api.js";
 import { consumeSseResponse } from "./lib/sse.js";
 import { RETRYABLE_STATUSES, createSemaphore, fetchWithPolicy, waitInterruptible } from "./lib/http.js";
-import { buildAuthUrl, listAssets, listTasks, parseAuthFragment } from "./lib/gee-rest.js";
+import { buildAuthUrl, listAssets, listTasks, parseAuthFragment, verifyOAuthState } from "./lib/gee-rest.js";
 
 const DEFAULT_SETTINGS = Object.freeze({
   baseUrl: "https://api.deepseek.com",
@@ -302,14 +302,20 @@ function authorizeGeeToken(clientId, interactive) {
   const existing = geeAuthInFlight.get(lockKey);
   if (existing) return existing;
   const pending = (async () => {
-    const authUrl = buildAuthUrl(clientId, chrome.identity.getRedirectURL());
+    // The state lives inside this per-client lock closure: it is generated
+    // with the request and compared against the callback, so an injected or
+    // replayed authorization response cannot be accepted (CSRF protection).
+    const { url: authUrl, state } = buildAuthUrl(clientId, chrome.identity.getRedirectURL());
     let callbackUrl;
     try {
       callbackUrl = await chrome.identity.launchWebAuthFlow({ url: authUrl, interactive: Boolean(interactive) });
     } catch (error) {
       throw new Error(`Google 授权未完成：${safeError(error)}`);
     }
-    const { accessToken, expiresIn } = parseAuthFragment(callbackUrl);
+    const { accessToken, expiresIn, state: callbackState } = parseAuthFragment(callbackUrl);
+    if (!verifyOAuthState(state, callbackState)) {
+      throw new Error("Google 授权回调的 state 校验未通过，可能存在跨站伪造风险，已拒绝该回调");
+    }
     const record = {
       token: accessToken,
       expiresAt: Date.now() + expiresIn * 1000,

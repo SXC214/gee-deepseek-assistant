@@ -940,9 +940,11 @@ assert.deepEqual(detailLockB.sources, detailLockA.sources, "shared parses produc
 let geeAuthFlowCalls = 0;
 globalThis.chrome.identity = {
   getRedirectURL: () => "https://sw-tests.chromiumapp.org/",
-  async launchWebAuthFlow() {
+  async launchWebAuthFlow({ url }) {
     geeAuthFlowCalls += 1;
-    return `https://sw-tests.chromiumapp.org/#access_token=sw-token-${geeAuthFlowCalls}&expires_in=3600`;
+    // Echo the request's OAuth state back, as Google does for legit flows.
+    const requestedState = new URL(url).searchParams.get("state") || "";
+    return `https://sw-tests.chromiumapp.org/#access_token=sw-token-${geeAuthFlowCalls}&expires_in=3600${requestedState ? `&state=${requestedState}` : ""}`;
   }
 };
 localData.settings = {
@@ -1048,11 +1050,12 @@ function slowAuthFlow(tokens) {
     get calls() {
       return calls;
     },
-    async launch() {
+    async launch({ url }) {
       calls += 1;
       // Keep the flow in flight long enough for concurrent callers to arrive.
       await new Promise((resolve) => setTimeout(resolve, 20));
-      return `https://sw-tests.chromiumapp.org/#access_token=${tokens(calls)}&expires_in=3600`;
+      const requestedState = new URL(url).searchParams.get("state") || "";
+      return `https://sw-tests.chromiumapp.org/#access_token=${tokens(calls)}&expires_in=3600${requestedState ? `&state=${requestedState}` : ""}`;
     }
   };
 }
