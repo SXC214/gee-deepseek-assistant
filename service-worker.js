@@ -31,6 +31,9 @@ const pendingAborts = new Set();
 const pageResultCache = new Map();
 // Shares one in-flight index fetch+parse across concurrent searches.
 const indexInFlight = new Map();
+// Shares one in-flight detail fetch+parse across concurrent first queries of
+// the same page (m4), mirroring indexInFlight above.
+const detailInFlight = new Map();
 const INDEX_TTL_MS = 24 * 60 * 60 * 1000;
 const DETAIL_CACHE_KEY = "pageDetailCacheV1";
 const DETAIL_CACHE_MAX_ENTRIES = 40;
@@ -738,25 +741,47 @@ export function detailCacheKey(url, query, kind) {
 
 async function fetchDetailPage(entry, query, kind, signal) {
   const key = detailCacheKey(entry.url, query, kind);
-  const memoryHit = pageResultCache.get(key);
+  const memoryHit = readMemoryDetail(key);
   if (memoryHit) return memoryHit;
-  // Survives service worker restarts: persistent summaries are consulted
-  // before any network fetch, and expired entries are filtered on read.
-  const persistedHit = await readPersistedDetail(key);
-  if (persistedHit) {
-    rememberDetailResult(key, persistedHit);
-    return persistedHit;
+  // Concurrent first queries of the same page share one fetch+parse pass, so
+  // a queued message or a dual-tool search never re-downloads the page while
+  // a parse is already running.
+  if (detailInFlight.has(key)) return detailInFlight.get(key);
+  const pending = (async () => {
+    try {
+      // Survives service worker restarts: persistent summaries are consulted
+      // before any network fetch, and expired entries are filtered on read.
+      const persistedHit = await readPersistedDetail(key);
+      if (persistedHit) {
+        rememberDetailResult(key, persistedHit);
+        return persistedHit;
+      }
+      const html = await fetchText(entry.url, signal);
+      const result = extractOfficialPage(html, entry.url, query, kind);
+      rememberDetailResult(key, result);
+      await persistDetailResult(key, result);
+      return result;
+    } finally {
+      detailInFlight.delete(key);
+    }
+  })();
+  detailInFlight.set(key, pending);
+  return pending;
+}
+
+function readMemoryDetail(key) {
+  const item = pageResultCache.get(key);
+  if (!item) return null;
+  if (typeof item.createdAt !== "number" || !item.result || Date.now() - item.createdAt >= INDEX_TTL_MS) {
+    pageResultCache.delete(key);
+    return null;
   }
-  const html = await fetchText(entry.url, signal);
-  const result = extractOfficialPage(html, entry.url, query, kind);
-  rememberDetailResult(key, result);
-  await persistDetailResult(key, result);
-  return result;
+  return item.result;
 }
 
 function rememberDetailResult(key, result) {
   if (serializedSize(result) > PAGE_RESULT_MAX_BYTES) return;
-  pageResultCache.set(key, result);
+  pageResultCache.set(key, { createdAt: Date.now(), result });
   if (pageResultCache.size > PAGE_RESULT_CACHE_LIMIT) {
     pageResultCache.delete(pageResultCache.keys().next().value);
   }
@@ -849,6 +874,11 @@ export const __testing = {
   clearRetrievalCaches() {
     pageResultCache.clear();
     indexInFlight.clear();
+    detailInFlight.clear();
+  },
+  // Backdates in-memory detail parses so tests can exercise the 24h TTL.
+  ageMemoryDetailCache(deltaMs) {
+    for (const item of pageResultCache.values()) item.createdAt -= deltaMs;
   },
   getGeeToken,
   invalidateGeeToken,

@@ -777,6 +777,53 @@ const expiredSearch = await dispatch({
 assert.equal(expiredSearch.ok, true);
 assert.ok(expiredFetches >= 1, "expired persistent entries are filtered and refetched");
 
+// Memory TTL (m4): in-memory parses also expire after 24h, even while the
+// worker stays alive. The persistent copy is removed so only the memory TTL
+// can explain the refetch.
+workerModule.__testing.clearRetrievalCaches();
+delete localData.pageDetailCacheV1;
+localData.datasetIndexV2 = { createdAt: Date.now(), entries: datasetEntries("MODIS_MTTL", 1) };
+let memTtlFetches = 0;
+globalThis.fetch = async () => {
+  memTtlFetches += 1;
+  return pageResponse(detailPageHtml);
+};
+const memTtlFirst = await dispatch({
+  type: "TOOLS_SEARCH",
+  payload: { requestId: "mem-ttl-a", query: "modis", datasetSearch: true, docsSearch: false }
+});
+assert.equal(memTtlFirst.ok, true);
+assert.equal(memTtlFetches, 1, "first search fetches the detail page once");
+workerModule.__testing.ageMemoryDetailCache(25 * 60 * 60 * 1000);
+delete localData.pageDetailCacheV1;
+const memTtlSecond = await dispatch({
+  type: "TOOLS_SEARCH",
+  payload: { requestId: "mem-ttl-b", query: "modis", datasetSearch: true, docsSearch: false }
+});
+assert.equal(memTtlSecond.ok, true);
+assert.equal(memTtlFetches, 2, "memory entries older than 24h are filtered and refetched");
+
+// Detail single-flight (m4): concurrent first queries of the same page share
+// one fetch+parse pass.
+workerModule.__testing.clearRetrievalCaches();
+delete localData.pageDetailCacheV1;
+localData.datasetIndexV2 = { createdAt: Date.now(), entries: datasetEntries("MODIS_DLOCK", 3) };
+let detailLockFetches = 0;
+globalThis.fetch = async () => {
+  detailLockFetches += 1;
+  // Keep the fetch in flight long enough for both searches to arrive.
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  return pageResponse(detailPageHtml);
+};
+const [detailLockA, detailLockB] = await Promise.all([
+  dispatch({ type: "TOOLS_SEARCH", payload: { requestId: "detail-lock-a", query: "modis", datasetSearch: true, docsSearch: false } }),
+  dispatch({ type: "TOOLS_SEARCH", payload: { requestId: "detail-lock-b", query: "modis", datasetSearch: true, docsSearch: false } })
+]);
+assert.equal(detailLockA.ok, true);
+assert.equal(detailLockB.ok, true);
+assert.equal(detailLockFetches, 3, "concurrent first queries share one fetch per detail page");
+assert.deepEqual(detailLockB.sources, detailLockA.sources, "shared parses produce identical sources");
+
 // ---- GEE REST routing: independent OAuth orchestration behind messages.
 let geeAuthFlowCalls = 0;
 globalThis.chrome.identity = {
