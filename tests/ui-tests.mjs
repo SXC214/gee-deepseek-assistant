@@ -325,16 +325,22 @@ assert.match(script, /payload: \{ code: snippet, mode: "insert" \}/);
 assert.match(script, /function injectShpAssetIntoPrompt\(asset\)/);
 assert.match(script, /资产: \$\{asset\.id\}（\$\{asset\.featureCount\} 个要素，bbox \[\$\{bboxText\}\]，字段: \$\{fieldsText\}）/);
 assert.match(script, /async function deleteLocalShpAsset\(assetId\)/);
-// Workspace auto-read connection: the connect button leads the editor action
-// row (读取 moves to the end as the secondary entry), a persistent status
-// slot mirrors the connection state, and the toggle persists under
-// workspaceAutoReadV1. Auto reads reuse the existing read path and are
-// debounced per tab on onActivated / onUpdated-complete events.
+// Workspace auto-read connection: the connect button and its status slot are
+// grouped into one cohesive unit (workspaceConnectGroup) placed right after
+// the clear-and-new-conversation button, while the editor action row returns
+// to run / asset-task / read. The toggle persists under workspaceAutoReadV1.
+// Auto reads reuse the existing read path and are debounced per tab on
+// onActivated / onUpdated-complete events.
 assert.match(html, /id="workspaceConnectButton" class="compact-button" type="button" aria-pressed="false">接入 New script 工作区<\/button>/);
 assert.match(html, /id="workspaceConnectStatus" class="hint workspace-connect-status">未接入<\/p>/);
-assert.ok(html.indexOf('id="workspaceConnectButton"') < html.indexOf('id="runButton"'), "workspace connect button must lead the editor action row");
-assert.ok(html.indexOf('id="runButton"') < html.indexOf('id="geeRestButton"'), "run button must stay second in the editor action row");
-assert.ok(html.indexOf('id="geeRestButton"') < html.indexOf('id="readButton"'), "read button must move to the end of the editor action row");
+assert.match(html, /id="workspaceConnectGroup" class="workspace-connect-group" role="group" aria-label="New script 工作区接入"/);
+assert.ok(html.indexOf('id="clearChatButton"') < html.indexOf('id="workspaceConnectGroup"'), "workspace connect group must sit right of the new-conversation button");
+assert.ok(html.indexOf('id="workspaceConnectGroup"') < html.indexOf('id="workspaceConnectButton"'), "workspace connect group must wrap its button");
+assert.ok(html.indexOf('id="workspaceConnectButton"') < html.indexOf('id="workspaceConnectStatus"'), "status text must sit directly beside the connect button");
+assert.ok(html.indexOf('id="workspaceConnectStatus"') < html.indexOf('id="connectionBadge"'), "workspace connect group must stay before the connection badge");
+assert.ok(html.indexOf('id="workspaceConnectStatus"') < html.indexOf('id="runButton"'), "workspace connect unit must leave the editor action row");
+assert.ok(html.indexOf('id="runButton"') < html.indexOf('id="geeRestButton"'), "run button must lead the editor action row");
+assert.ok(html.indexOf('id="geeRestButton"') < html.indexOf('id="readButton"'), "read button must end the editor action row");
 assert.ok(references.has("workspaceConnectButton"), "sidepanel.js must reference elements.workspaceConnectButton");
 assert.ok(references.has("workspaceConnectStatus"), "sidepanel.js must reference elements.workspaceConnectStatus");
 assert.match(script, /const WORKSPACE_AUTO_READ_KEY = "workspaceAutoReadV1"/);

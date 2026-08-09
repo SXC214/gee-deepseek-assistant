@@ -100,7 +100,7 @@ button.primary:hover { background: var(--blue-dark); }
 }
 
 .header-leading { min-width: 0; gap: 9px; }
-.header-actions { gap: 7px; }
+.header-actions { flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
 .brand-copy { min-width: 0; }
 h1 { margin: 0; font-size: 16px; line-height: 1.2; }
 .brand-copy p { margin: 2px 0 0; color: var(--muted); font-size: 10px; }
@@ -206,7 +206,16 @@ textarea:focus {
 .editor-context-copy span { color: var(--muted); font-size: 10px; }
 .editor-actions { flex: none; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
 .compact-button { min-height: 27px; padding: 3px 8px; font-size: 11px; }
-.workspace-connect-status { flex-basis: 100%; }
+.workspace-connect-group {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 2px 6px;
+}
+.workspace-connect-status { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .workspace-connect-status-connected { color: #188038; }
 
 .gee-redirect-row { display: flex; align-items: center; gap: 6px; }

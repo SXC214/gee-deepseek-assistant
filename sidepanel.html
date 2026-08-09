@@ -18,6 +18,10 @@
         </div>
         <div class="header-actions">
           <button id="clearChatButton" class="compact-button" type="button" title="清空并新建对话">清空并新建对话</button>
+          <div id="workspaceConnectGroup" class="workspace-connect-group" role="group" aria-label="New script 工作区接入">
+            <button id="workspaceConnectButton" class="compact-button" type="button" aria-pressed="false">接入 New script 工作区</button>
+            <p id="workspaceConnectStatus" class="hint workspace-connect-status">未接入</p>
+          </div>
           <span id="connectionBadge" class="badge muted">未连接</span>
         </div>
       </header>
@@ -106,12 +110,10 @@
             <span id="scriptMeta">打开 Earth Engine Code Editor 后读取</span>
           </div>
           <div class="editor-actions">
-            <button id="workspaceConnectButton" class="compact-button" type="button" aria-pressed="false">接入 New script 工作区</button>
             <button id="runButton" class="compact-button" type="button">运行</button>
             <button id="geeRestButton" class="compact-button" type="button" aria-controls="geeRestPanel" aria-expanded="false">资产/任务</button>
             <button id="readButton" class="compact-button" type="button">读取</button>
           </div>
-          <p id="workspaceConnectStatus" class="hint workspace-connect-status">未接入</p>
         </section>
 
         <section id="geeRestPanel" class="gee-rest-panel hidden" aria-label="Earth Engine 资产与任务" aria-hidden="true">
