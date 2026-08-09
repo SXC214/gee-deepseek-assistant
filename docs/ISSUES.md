@@ -131,6 +131,24 @@
 - 所在层：服务层（service-worker.js runGeeRestCall / geeRestImportRequest）
 - 状态：不修复（v0.4.x 复审建议项 4：触发条件苛刻且现有测试已背书整链重试语义，权衡后保留现状；如后续出现实际 abort 竞态报告再引入重试级 requestId 去重）
 
+### ISS-013 生成代码易触发 GEE 运行时报错，且 Console 报错缺乏针对性诊断
+- 编号：ISS-013
+- 标题：生成代码 GEE 运行时报错规避与诊断
+- 现象：生成的脚本容易命中常见 Earth Engine 运行时报错（如 User memory limit exceeded、Collection is empty、Image has no valid pixels 等）；Console 已有报错文本时，助手也只做泛泛回应，不针对已知错误模式给出诊断。
+- 复现步骤：让助手生成大区域/长时序计算脚本并在 Code Editor 运行，在 Console 观察上述报错；随后带 Console 上下文向助手提问，观察回答是否命中已知错误模式。
+- 控制台报错：典型 GEE 运行时报错文本（如 User memory limit exceeded: Too many concurrent aggregations.）
+- 所在层：库层（lib/gee-errors.js 错误模式库与性能守则）、编排层（lib/orchestrator.js 系统提示词注入与 Console 报错诊断段）
+- 状态：已修复（性能守则注入直答/编码系统提示词做事前规避；Console 读取成功后按已捕获文本匹配已知错误模式生成诊断段，未读取状态绝不喂入；tests/gee-errors-tests.mjs 回归）
+
+### ISS-014 ee.* 函数/符号幻觉只能靠运行后才发现
+- 编号：ISS-014
+- 标题：ee.* 函数幻觉前置检索+后置校验
+- 现象：模型会虚构不存在或拼错的 ee.* 方法/符号（幻觉），候选代码在写入 Code Editor 运行前没有任何静态提示，用户只能运行后才看到 `xxx is not a function` 一类报错。
+- 复现步骤：让助手生成包含冷门 ee.* 调用的脚本，观察候选代码卡的警告列表是否标出未在官方名单中找到的符号及候选建议；或开启多 Agent 流水线观察确定性检查报告。
+- 控制台报错：无（属运行前静态检查）
+- 所在层：库层（lib/ee-api-validate.js 校验、lib/ee-api-index.json 官方 API 静态快照）、UI 层（sidepanel 候选代码卡警告列表）、编排层（代码意图检索查询追加 ee.* 符号、校验结果纳入多 Agent 确定性检查）
+- 状态：已修复（前置：代码意图检索查询自动追加 ee.* 符号以官方资料核验；后置：候选卡实时展示未知 ee 符号与修正建议，多 Agent 流水线将 lint/符号校验作为审查硬依据；API 名单为静态快照，再生成方法与滞后警告措辞见 README「已知限制」）
+
 ---
 
 ## 审核闭环记录
