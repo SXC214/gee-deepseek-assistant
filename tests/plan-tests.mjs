@@ -448,6 +448,11 @@ const beijingSession = applyPlanResponse(
   beijingReady
 );
 assert.equal(beijingSession.state, "ready");
+assert.match(
+  (beijingSession.planWarnings || []).join("\n"),
+  /static spatial dataset/,
+  "applyPlanResponse must surface validation warnings for disclosure"
+);
 
 const singleDateStatic = structuredClone(beijingReady);
 singleDateStatic.datasets[0] = {
@@ -527,5 +532,75 @@ const strictRestored = restorePlanSession({
 });
 assert.equal(strictRestored.state, "clarifying");
 assert.equal(strictRestored.planStale, true);
+
+// CodeReview regression: open-ended coverage wording ("2000-present" /
+// "2000-至今") marks an in-service time series, never a static snapshot —
+// GPM/MODIS-style datasets must stay gated by temporal coverage checks.
+const gpm = {
+  type: "dataset",
+  title: "GPM IMERG Daily Precipitation",
+  url: "https://developers.google.com/earth-engine/datasets/catalog/NASA_GPM_L3_IMERG_DAILY",
+  datasetId: "NASA/GPM_L3/IMERG_DAILY",
+  summary: "Dataset Availability 2000-06-01T00:00:00Z–2026-08-01T00:00:00Z"
+};
+const openEndedRequest = "分析 1990-2020 年广州市降水变化";
+const openEndedSources = mergeSources([gpm], [modis]);
+function openEndedPlan(coverage) {
+  return {
+    status: "ready",
+    goal: openEndedRequest,
+    datasets: [{
+      datasetId: gpm.datasetId,
+      url: gpm.url,
+      name: "GPM IMERG",
+      coverage,
+      spatialResolution: "0.1°",
+      advantages: "日尺度降水",
+      limitations: "高纬度精度下降",
+      recommendation: "作为降水主数据"
+    }],
+    requirements: {
+      area: "广州市",
+      timeRange: "1990-2020",
+      temporalAggregation: "年度合计",
+      spatialStatistic: "区域均值",
+      qualityControl: "质量控制位过滤"
+    },
+    method: "逐年降水合成并统计区域均值。",
+    outputs: ["年度降水 CSV"],
+    questions: []
+  };
+}
+for (const coverage of ["2000-present", "2000-至今"]) {
+  const openEnded = validatePlanResponse(openEndedPlan(coverage), openEndedSources, { originalRequest: openEndedRequest });
+  assert.equal(openEnded.valid, false, `open-ended coverage "${coverage}" must stay gated by temporal checks`);
+  assert.match(openEnded.errors.join("\n"), /does not cover the full requested period/);
+  assert.ok(
+    !openEnded.warnings.some((warning) => /static spatial dataset/.test(warning)),
+    `open-ended series "${coverage}" must not be treated as a static dataset`
+  );
+}
+const modisOpen = openEndedPlan("2000-present");
+modisOpen.datasets[0] = {
+  datasetId: modis.datasetId,
+  url: modis.url,
+  name: "MODIS",
+  coverage: "2000-present",
+  spatialResolution: "250 m",
+  advantages: "长时序植被指数",
+  limitations: "2000 年前无数据",
+  recommendation: "作为长时序主数据"
+};
+const modisOpenValidation = validatePlanResponse(modisOpen, [modis], { originalRequest: openEndedRequest });
+assert.equal(modisOpenValidation.valid, false, "MODIS-style open-ended series must stay gated");
+assert.match(modisOpenValidation.errors.join("\n"), /does not cover the full requested period/);
+
+// CodeReview guard: a QA/cloud-mask role ("作为云掩膜") must never exempt a
+// temporal dataset via the spatial-extent role pattern.
+const qaRolePlan = openEndedPlan("2000-2026");
+qaRolePlan.datasets[0].recommendation = "作为云掩膜";
+const qaRoleValidation = validatePlanResponse(qaRolePlan, openEndedSources, { originalRequest: openEndedRequest });
+assert.equal(qaRoleValidation.valid, false, "a cloud-mask QA role must not exempt a temporal dataset");
+assert.match(qaRoleValidation.errors.join("\n"), /does not cover the full requested period/);
 
 console.log("Plan tests passed.");
