@@ -21,7 +21,8 @@ const DEFAULT_SETTINGS = Object.freeze({
   docsSearch: true,
   thinkingEnabled: true,
   reasoningEffort: "high",
-  compatibleStreaming: false
+  compatibleStreaming: false,
+  multiAgentPipeline: false
 });
 
 const activeRequests = new Map();
@@ -203,7 +204,8 @@ async function saveSettings(payload) {
     rememberApiKey: Boolean(payload.rememberApiKey),
     thinkingEnabled: payload.thinkingEnabled !== false,
     reasoningEffort: normalizeReasoningEffort(payload.reasoningEffort),
-    compatibleStreaming: Boolean(payload.compatibleStreaming)
+    compatibleStreaming: Boolean(payload.compatibleStreaming),
+    multiAgentPipeline: Boolean(payload.multiAgentPipeline)
   };
 
   if (!settings.model) throw new Error("模型名称不能为空");
@@ -430,7 +432,7 @@ async function chat(payload) {
     ]);
     throwIfAborted(controller.signal);
     const merged = mergeStoredSettings(settings);
-    if (!apiKey) throw new Error("请先在设置中填写 API Key");
+    if (!apiKey && !isLocalBridgeBaseUrl(merged.baseUrl)) throw new Error("请先在设置中填写 API Key");
     const body = buildChatRequestBody({
       model: merged.model,
       messages: normalizeMessages(payload.messages),
@@ -509,7 +511,7 @@ async function streamChat(payload, port) {
     ]);
     throwIfAborted(controller.signal);
     const merged = mergeStoredSettings(settings);
-    if (!apiKey) throw new Error("请先在设置中填写 API Key");
+    if (!apiKey && !isLocalBridgeBaseUrl(merged.baseUrl)) throw new Error("请先在设置中填写 API Key");
     // Official DeepSeek V4 endpoints always stream. Compatible endpoints may
     // opt in via settings.compatibleStreaming; they never send or parse the
     // DeepSeek-only reasoning fields, but share the zero-content retry and
@@ -1046,10 +1048,22 @@ function mergeStoredSettings(value) {
     docsSearch: stored.docsSearch !== false,
     thinkingEnabled: stored.thinkingEnabled !== false,
     compatibleStreaming: stored.compatibleStreaming === true,
+    multiAgentPipeline: stored.multiAgentPipeline === true,
     reasoningEffort: isValidReasoningEffort(stored.reasoningEffort)
       ? String(stored.reasoningEffort).toLowerCase()
       : DEFAULT_SETTINGS.reasoningEffort
   };
+}
+
+// Local bridges (http://localhost / http://127.0.0.1, any port) accept an
+// empty API Key; every other endpoint still requires one.
+function isLocalBridgeBaseUrl(baseUrl) {
+  try {
+    const parsed = new URL(String(baseUrl || ""));
+    return parsed.protocol === "http:" && ["localhost", "127.0.0.1"].includes(parsed.hostname);
+  } catch {
+    return false;
+  }
 }
 
 function normalizeBaseUrl(value) {
