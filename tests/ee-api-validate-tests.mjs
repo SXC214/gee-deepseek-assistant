@@ -37,6 +37,11 @@ assert.deepEqual(extracted.filter((symbol) => symbol.startsWith("ee.Image")), ["
 assert.ok(extracted.includes("ee.Algorithms.Landsat.simpleComposite"), "three-segment chains are extracted");
 assert.equal(extracted.filter((symbol) => symbol === "ee.Image").length, 1, "symbols are deduplicated");
 
+// --- extractEeCalls: multi-line template literals stay opaque ---
+const multilineTemplate = extractEeCalls("var note = `\nopen template ee.FakeSymbol.body ( with [ unbalanced\n`;\nvar img = ee.Image('x');");
+assert.ok(!multilineTemplate.some((symbol) => symbol.includes("Fake")), "multi-line template content must not be scanned");
+assert.deepEqual(multilineTemplate, ["ee.Image"], "code outside the template is still extracted");
+
 // --- validateEeCalls: legit calls and instance chains ---
 const clean = validateEeCalls('var img = ee.Image("LC08").ndvi().rename("NDVI");\nvar col = ee.ImageCollection("S2").filterDate("a", "b");', { index });
 assert.equal(clean.unknown.length, 0, "ee.Image passes, instance chain .ndvi() is not checked");
@@ -66,6 +71,15 @@ assert.equal(bySymbol.verifiedByContext, 1);
 const byClassDotMethod = validateEeCalls("var x = ee.Image.adBands(1);", { index, verifiedContext: "确认 Image.adBands 可用" });
 assert.equal(byClassDotMethod.unknown.length, 0);
 assert.equal(byClassDotMethod.verifiedByContext, 1);
+
+// --- validateEeCalls: verifiedContext must anchor on word boundaries ---
+const bareWordWash = validateEeCalls("var x = ee.Info(1);", { index, verifiedContext: "快照文本含 info 字样的说明" });
+assert.equal(bareWordWash.unknown.length, 1, "a bare word must not wash an unknown symbol clean");
+const anchoredClass = validateEeCalls("var x = ee.Info(1);", { index, verifiedContext: "已核对 ee.Info 官方文档" });
+assert.equal(anchoredClass.verifiedByContext, 1);
+assert.equal(anchoredClass.unknown.length, 0);
+const longerSymbol = validateEeCalls("var x = ee.Info(1);", { index, verifiedContext: "仅核对过 ee.Information" });
+assert.equal(longerSymbol.unknown.length, 1, "a longer symbol must not verify a shorter prefix");
 
 // --- validateEeCalls: bracket / Algorithms / top-level exemptions ---
 const exempted = validateEeCalls(`
@@ -108,6 +122,8 @@ const strayBracket = lintGeeScript("var a = 1]\nvar b = 2;\nvar c = 3;");
 assert.equal(strayBracket.ok, false);
 const balancedCommentNoise = lintGeeScript("// stray ( brace in comment\n/* } */\nvar a = 1;");
 assert.equal(balancedCommentNoise.ok, true, "brackets inside comments/strings are ignored");
+const multilineTemplateLint = lintGeeScript("var note = `\n( [ { stray brackets\n`;\nvar b = 2;\nvar c = 3;");
+assert.equal(multilineTemplateLint.ok, true, "newlines and brackets inside multi-line templates must not break lint");
 
 const oauthLeak = lintGeeScript('var token = "ya29.a0AfH6SMBx";\nvar b = 2;\nvar c = 3;');
 assert.equal(oauthLeak.ok, false);
