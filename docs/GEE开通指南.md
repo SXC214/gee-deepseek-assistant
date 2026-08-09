@@ -139,8 +139,8 @@
 
 > **To complete registration, please enable the Earth Engine API.**
 
-> ⚠️ **务必点击对话框中的 Enable 按钮，激活 Earth Engine API 之后再离开页面。**
-> 如果此时直接退出，会导致注册不完整，后续使用会出问题。
+> 💡 **建议在弹窗出现时直接点击 Enable 按钮，激活 Earth Engine API 后再离开页面。**
+> 错过这一步倒不会导致注册失败，只是之后想重新找到这个激活入口会比较麻烦，建议当场一次点完。
 
 ## 11. 注册完成
 
