@@ -30,13 +30,19 @@
 
 ## 1. 进入非商业入口
 
+![非商业入口页：导航栏 Noncommercial 高亮](images/guide-01-noncommercial-entry.png)
+
 访问 **<https://earthengine.google.com/noncommercial/>**。
 
 - 页面顶部导航栏中 **Noncommercial** 项处于高亮选中状态。
 - 页面标题介绍 **Earth Engine for Noncommercial and Research Use**（面向非商业与科研用途的 Earth Engine）。
 - 点击页面上的蓝色 **Get Started** 按钮，开始开通流程。
 
+![页面介绍 Earth Engine for Noncommercial and Research Use，红框标注 Get Started 按钮](images/guide-02-get-started.png)
+
 ## 2. 选择 Google 账号
+
+![Google 登录页：Choose an account to continue to Earth Engine Code Editor](images/guide-03-choose-account.png)
 
 点击 Get Started 后跳转到 Google 登录页面，提示 **「Choose an account to continue to Earth Engine Code Editor」**。
 
@@ -45,12 +51,16 @@
 
 ## 3. 进入 Google Cloud 控制台 Earth Engine 配置页
 
+![Configuration 页提示 To view this page, select a project，红框标注 Create project](images/guide-04-ee-config-select-project.png)
+
 登录后自动跳转到 Google Cloud 控制台（`console.cloud.google.com`）：
 
 - 在左侧导航菜单中选择 **Earth Engine → Configuration**。
 - 如果此时尚未选择项目，页面会提示 **「To view this page, select a project」**，需要先创建一个项目（见下一步）。
 
 ## 4. 创建项目
+
+![New Project 页：Project name 填 GEE project，Organization 选 No organization，红框标注 Create](images/guide-05-new-project.png)
 
 在提示处点击 **Create project**，进入 **New Project** 页面：
 
@@ -66,6 +76,8 @@
 
 ## 5. 注册第 ① 步：选择组织类型
 
+![组织类型下拉，红框选中学术机构选项](images/guide-06-org-type.png)
+
 回到 **Earth Engine → Configuration** 页面，点击 **Register** 开始注册，进入 **「Select your organization type」** 页面。
 
 下拉选项包括：公司、学术机构、非营利组织、政府机构、媒体、培训用途、其他等。
@@ -73,6 +85,8 @@
 - **学生与科研人员请选择：`Public or private academic institution (including faculty, staff, students)`**（公立或私立学术机构，含教职工、员工、学生）。
 
 ## 6. 注册第 ② 步：非商业资格核验
+
+![资格核验表单：机构名、报酬、使用性质、研究问题、地理范围、发表成果](images/guide-07-eligibility-form.png)
 
 此步骤需要用**英文**依次填写以下信息：
 
@@ -84,6 +98,8 @@
 6. **是否已有使用 Earth Engine 的发表成果**：首次申请选 **No**。
 
 ## 7. 注册第 ③ 步：选择计划（Choose your plan）
+
+![资格判定提示：you are eligible for noncommercial Earth Engine use，点 Next 进入选计划](images/guide-08-eligible-next.png)
 
 系统会先显示资格判定结果：
 
@@ -100,16 +116,24 @@
 
 **选择建议：没有海外实体信用卡就选 Community。** 该计划无需任何信用卡，对绝大多数学生与科研人员已经够用。
 
+![计划详情：Community 150 EECU-hour 免账单 vs Contributor 1,000 EECU-hour 需账单账户](images/guide-09-choose-plan.png)
+
 ## 8. 注册第 ④ 步：描述你的工作
+
+![Describe your work：工作类别可如实或随便填写，下拉为必填](images/guide-10-describe-work.png)
 
 - **工作类别**：选项包括 Mitigation（减缓）/ Adaptation（适应）/ Protection & conservation（保护与保育），可如实勾选，也可随意勾选。
 - **「Will you use Earth Engine for any of the following?」**：下拉选项，**必填**，按实际情况选择即可。
 
 ## 9. 注册第 ⑤ 步：Review summary
 
+![Review summary：核对组织类型、机构名、用途、研究问题等，直接点下方 Register](images/guide-11-review-summary.png)
+
 核对全部已填信息，包括组织类型、机构名称、使用性质、研究问题等。确认无误后提交。
 
 ## 10. 提交注册并启用 API（⚠️ 易踩坑）
+
+![Enable APIs 弹窗，红框标注 Enable 按钮：别急着退，点这里激活 GEE 的 API](images/guide-12-enable-api.png)
 
 点击 **Register** 提交后，会弹出 **「Enable APIs」** 对话框，提示：
 
@@ -119,6 +143,8 @@
 > 如果此时直接退出，会导致注册不完整，后续使用会出问题。
 
 ## 11. 注册完成
+
+![注册完成页：已注册 Community Tier，可查看月度 EECU 额度使用情况](images/guide-13-registration-done.png)
 
 API 启用后，回到 Configuration 页面会看到注册成功提示：
 
@@ -138,24 +164,38 @@ API 启用后，回到 Configuration 页面会看到注册成功提示：
 
 ## 1. 回到 Google Cloud 控制台
 
+![EE Configuration 页，左上角 Google Cloud Logo 标注「点这里返回 Google Cloud Console」](images/oauth-01-back-to-console.png)
+
 在 Earth Engine 配置页面，点击左上角的 **「Google Cloud」Logo** 即可返回控制台首页；也可以直接使用顶部搜索栏进入下一步。
 
 ## 2. 搜索进入 APIs & Services
 
+![GCP 控制台首页，红框标注顶部搜索栏](images/oauth-02-console-search.png)
+
 在控制台顶部搜索栏输入 `api`，在搜索结果中选择 **「APIs & Services」**（标注为 Product · API management for cloud services）。
 
+![搜索 api 的结果，红框选中 APIs & Services](images/oauth-03-apis-services.png)
+
 ## 3. 进入 OAuth 同意屏幕
+
+![APIs & Services 页，红框标注左侧 OAuth consent screen](images/oauth-04-consent-screen-nav.png)
 
 在左侧导航中点击 **「OAuth consent screen」**（现已整合进新界面 **Google Auth Platform**）。
 
 - 如果页面提示 **「Google Auth Platform not configured yet」**，点击 **Get started** 开始配置。
 
+![Google Auth Platform 未配置，红框标注 Get started](images/oauth-05-auth-platform-get-started.png)
+
 ## 4. 第 1 步：App Information
+
+![App Information：App name 可自定义，User support email 选上自己的邮箱即可](images/oauth-06-app-info.png)
 
 - **App name**：可自定义应用名称（如 `GEE assistance`）。
 - **User support email**：选择自己的邮箱即可。
 
 ## 5. 第 2 步：Audience
+
+![Audience 步骤：选择 External](images/oauth-07-audience-external.png)
 
 选择 **External**，点击 **Next**。
 
@@ -163,9 +203,13 @@ API 启用后，回到 Configuration 页面会看到注册成功提示：
 
 ## 6. 第 3 步：Contact Information
 
+![Contact Information：Email addresses 填自己的邮箱，一路 Next](images/oauth-08-contact-info.png)
+
 **Email addresses** 依旧填写自己的邮箱，然后一路 **Next** 继续。
 
 ## 7. 第 4 步：Finish
+
+![Finish：勾选同意 User Data Policy，红框标注「不要忘记 create」](images/oauth-09-finish-create.png)
 
 勾选同意 **Google API Services: User Data Policy**，点击 **Continue**。
 
@@ -173,12 +217,18 @@ API 启用后，回到 Configuration 页面会看到注册成功提示：
 
 ## 8. 创建 OAuth 客户端
 
+![OAuth configuration created，红框标注 Create OAuth client](images/oauth-10-config-created.png)
+
 创建完成后，页面提示 **「OAuth configuration created!」**，点击 **Create OAuth client** 继续：
 
 - **Application type**：选择 **Web application**（下拉中也有 Chrome Extension 等选项，按本教程选 Web application）。
 - **Name**：可保持默认（如 `Web client 1`）。
 
+![Application type 下拉选择 Web application](images/oauth-11-client-type-web.png)
+
 ## 9. 从扩展复制回调地址（关键）
+
+![扩展设置面板，红框标注「复制」按钮（chromiumapp.org 回调地址）](images/oauth-12-copy-redirect-uri.png)
 
 先打开本扩展的侧栏设置面板：
 
@@ -187,10 +237,14 @@ API 启用后，回到 Configuration 页面会看到注册成功提示：
 
 ## 10. 填入重定向 URI
 
+![Authorized redirect URIs：点 + Add URI，将插件中的地址复制进来](images/oauth-13-add-uri.png)
+
 回到 Create OAuth client 页面：
 
 - 在 **Authorized redirect URIs** 下点击 **「+ Add URI」**，把刚复制的 `chromiumapp.org` 地址粘贴进去。
 - 点击 **Create**。
+
+![已填入 chromiumapp.org 重定向 URI，红框标注 Create 按钮：创建后复制 ID](images/oauth-14-create-client.png)
 
 > 💡 提示：配置生效可能需要 **5 分钟到几小时**，创建后如授权未立即生效请稍作等待。
 
@@ -198,12 +252,16 @@ API 启用后，回到 Configuration 页面会看到注册成功提示：
 
 ### 11.1 复制 Client ID
 
+![OAuth client created 弹窗，红框标注复制 Client ID，含 test users 限制提示](images/oauth-15-copy-client-id.png)
+
 页面弹出 **「OAuth client created」** 对话框：
 
 - 复制 **Client ID**（形如 `xxxx.apps.googleusercontent.com`）。
 - 注意弹窗中的提示：**「OAuth access is restricted to the test users listed on your OAuth consent screen」**。
 
 ### 11.2 添加测试用户
+
+![Audience 页 Test users：点 + Add users，红框标注「添加自己的邮箱」](images/oauth-16-add-test-users.png)
 
 进入 Google Auth Platform 左侧导航的 **「Audience」** 页面：
 
@@ -214,6 +272,8 @@ API 启用后，回到 Configuration 页面会看到注册成功提示：
 > ⚠️ 不做此步，扩展授权时会报 `403: access_denied` / Access blocked。相关说明可参见 `README.md`「REST 直连」章节中关于测试用户的描述。
 
 ## 12. 填回扩展并完成授权
+
+![扩展设置面板：Google OAuth 客户端 ID 字段与 Earth Engine Project ID 字段](images/oauth-17-fill-client-id.png)
 
 打开扩展侧栏设置面板：
 
