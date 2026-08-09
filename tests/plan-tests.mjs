@@ -391,4 +391,141 @@ const mixedOfficialIdentity = restorePlanSession({
 assert.equal(mixedOfficialIdentity.state, "clarifying");
 assert.equal(mixedOfficialIdentity.planStale, true);
 
+// ISS-015 regression guard: a static boundary dataset (FAO/GAUL 2015) must
+// never block ready alongside a covering Sentinel-2 time series, while a
+// genuinely uncovered temporal dataset is still rejected, and repeated
+// identical coverage findings degrade to warnings after enough revisions.
+const gaul = {
+  type: "dataset",
+  title: "FAO GAUL 2015 level 2 administrative boundaries",
+  url: "https://developers.google.com/earth-engine/datasets/catalog/FAO_GAUL_2015_level2",
+  datasetId: "FAO/GAUL/2015/level2",
+  summary: "Dataset Availability 2015-01-01T00:00:00Z–2015-12-31T00:00:00Z"
+};
+const beijingRequest = "计算北京市 2023 年夏季 Sentinel-2 NDVI 均值";
+const beijingSources = mergeSources([gaul], [sentinel]);
+const beijingReady = {
+  status: "ready",
+  goal: "计算北京市 2023 年夏季 Sentinel-2 NDVI 均值",
+  datasets: [
+    {
+      datasetId: "FAO/GAUL/2015/level2",
+      url: gaul.url,
+      name: "FAO GAUL 2015",
+      coverage: "2015",
+      spatialResolution: "矢量边界",
+      advantages: "提供统一可复现的行政边界",
+      limitations: "静态边界数据，无时间维度",
+      recommendation: "仅用于界定研究区空间范围"
+    },
+    {
+      datasetId: "COPERNICUS/S2_SR_HARMONIZED",
+      url: sentinel.url,
+      name: "Sentinel-2",
+      coverage: "2017-2026",
+      spatialResolution: "10 m",
+      advantages: "覆盖请求时段，重访周期短",
+      limitations: "夏季云量较多",
+      recommendation: "作为主数据计算 NDVI"
+    }
+  ],
+  requirements: {
+    area: "北京市 FAO/GAUL 2015 行政边界",
+    timeRange: "2023-06-01 至 2023-08-31",
+    temporalAggregation: "夏季均值",
+    spatialStatistic: "区域内像元均值",
+    qualityControl: "s2cloudless 云概率过滤"
+  },
+  method: "过滤夏季影像、计算 NDVI 并做区域均值。",
+  outputs: ["夏季 NDVI 均值"],
+  questions: []
+};
+const beijingValidation = validatePlanResponse(beijingReady, beijingSources, { originalRequest: beijingRequest });
+assert.equal(beijingValidation.valid, true, `static boundary dataset must not block ready: ${beijingValidation.errors.join("; ")}`);
+assert.match(beijingValidation.warnings.join("\n"), /static spatial dataset/);
+const beijingSession = applyPlanResponse(
+  { ...addPlanAnswer(createPlanSession(beijingRequest), "采用推荐的 GAUL 边界和云过滤口径。"), sources: beijingSources },
+  beijingReady
+);
+assert.equal(beijingSession.state, "ready");
+
+const singleDateStatic = structuredClone(beijingReady);
+singleDateStatic.datasets[0] = {
+  ...singleDateStatic.datasets[0],
+  name: "全国陆地表层覆盖快照",
+  datasetId: "FAO/GAUL/2015/level2",
+  coverage: "static snapshot without a temporal dimension",
+  recommendation: "用于空间参照"
+};
+assert.equal(
+  validatePlanResponse(singleDateStatic, beijingSources, { originalRequest: beijingRequest }).valid,
+  true,
+  "coverage wording describing a single point in time exempts the dataset"
+);
+
+const hallucinatedStaticYear = structuredClone(beijingReady);
+hallucinatedStaticYear.datasets[0].coverage = "1990";
+assert.match(
+  validatePlanResponse(hallucinatedStaticYear, beijingSources, { originalRequest: beijingRequest }).errors.join("\n"),
+  /conflicts with the official Dataset Availability/,
+  "hallucinated years stay rejected even for exempt static datasets"
+);
+
+// Regression guard: a genuinely uncovered temporal dataset (wording mentions
+// cloud masking, which must NOT trigger the static exemption) is still
+// rejected even when a static boundary dataset sits next to it.
+const landsatOld = { ...landsat, summary: "Dataset Availability 1984-03-16T00:00:00Z–2012-05-05T00:00:00Z" };
+const cloudMaskedTemporal = structuredClone(beijingReady);
+cloudMaskedTemporal.datasets[1] = {
+  datasetId: landsat.datasetId,
+  url: landsat.url,
+  name: "Landsat",
+  coverage: "1984-2012",
+  spatialResolution: "30 m",
+  advantages: "长历史存档",
+  limitations: "2012 年后无观测",
+  recommendation: "经 QA 云掩膜处理后作为主数据"
+};
+const cloudMaskedValidation = validatePlanResponse(cloudMaskedTemporal, mergeSources([gaul], [landsatOld]), {
+  originalRequest: beijingRequest
+});
+assert.equal(cloudMaskedValidation.valid, false);
+assert.match(cloudMaskedValidation.errors.join("\n"), /does not cover the full requested period/);
+assert.match(cloudMaskedValidation.errors.join("\n"), /cannot be a primary dataset/);
+assert.match(cloudMaskedValidation.errors.join("\n"), /officially verified dataset covering the requested period/);
+
+const earlyRevision = validatePlanResponse(sentinelOnly, [sentinel], {
+  originalRequest: "计算 2000-2020 年广州市 NDVI 均值变化",
+  revision: 5
+});
+assert.equal(earlyRevision.valid, false, "coverage findings stay blocking before the revision cap");
+const relaxedRevision = validatePlanResponse(sentinelOnly, [sentinel], {
+  originalRequest: "计算 2000-2020 年广州市 NDVI 均值变化",
+  revision: 6
+});
+assert.equal(relaxedRevision.valid, true, "repeated coverage findings must degrade to warnings after enough revisions");
+assert.match(relaxedRevision.warnings.join("\n"), /does not cover the full requested period/);
+
+const relaxedRestored = restorePlanSession({
+  originalRequest: "计算 2000-2020 年广州市 NDVI 均值变化",
+  state: "ready",
+  stableState: "ready",
+  userTurns: ["确认口径"],
+  revision: 6,
+  plan: sentinelOnly,
+  sources: [sentinel]
+});
+assert.equal(relaxedRestored.state, "ready", "a relaxed ready plan stays confirmable after restore");
+const strictRestored = restorePlanSession({
+  originalRequest: "计算 2000-2020 年广州市 NDVI 均值变化",
+  state: "ready",
+  stableState: "ready",
+  userTurns: ["确认口径"],
+  revision: 1,
+  plan: sentinelOnly,
+  sources: [sentinel]
+});
+assert.equal(strictRestored.state, "clarifying");
+assert.equal(strictRestored.planStale, true);
+
 console.log("Plan tests passed.");

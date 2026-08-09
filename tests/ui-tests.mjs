@@ -136,6 +136,12 @@ assert.match(orchestratorScript, /parsePlanResponse\(stripFencedCodeBlocks\(rawC
 assert.match(orchestratorScript, /premature\.prematurePlanCode = true/);
 assert.match(orchestratorScript, /模型在计划阶段提前返回了代码，已忽略未应用/);
 assert.match(orchestratorScript, /if \(error\?\.prematurePlanCode\)/);
+// ISS-015 regression guard: both planning system prompts clarify that static
+// spatial datasets (boundaries/masks used only to define the study area)
+// never participate in temporal coverage validation.
+assert.match(orchestratorScript, /静态\/非时序空间数据集/);
+assert.match(orchestratorScript, /不参与时间覆盖校验/);
+assert.match(orchestratorScript, /5\.1 静态\/非时序空间数据集/);
 assert.match(styles, /\.status-error\s*\{[\s\S]*?white-space:\s*normal/);
 assert.match(styles, /html,[\s\S]*?body\s*\{[\s\S]*?overflow:\s*hidden/);
 assert.match(styles, /\.conversation\s*\{[\s\S]*?overflow-y:\s*auto/);
