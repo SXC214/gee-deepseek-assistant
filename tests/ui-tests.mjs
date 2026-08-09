@@ -6,6 +6,7 @@ const html = fs.readFileSync(new URL("../sidepanel.html", import.meta.url), "utf
 const script = fs.readFileSync(new URL("../sidepanel.js", import.meta.url), "utf8");
 const orchestratorScript = fs.readFileSync(new URL("../lib/orchestrator.js", import.meta.url), "utf8");
 const storageScript = fs.readFileSync(new URL("../lib/storage.js", import.meta.url), "utf8");
+const serviceWorkerScript = fs.readFileSync(new URL("../service-worker.js", import.meta.url), "utf8");
 const styles = fs.readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 const manifest = JSON.parse(fs.readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
 const packageJson = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -356,5 +357,32 @@ assert.match(script, /elements\.workspaceConnectButton\.disabled = value/);
 // click handler and confirmation flow.
 assert.match(html, /id="clearChatButton" class="compact-button" type="button" title="清空并新建对话">清空并新建对话<\/button>/);
 assert.match(script, /elements\.clearChatButton\.addEventListener\("click", startNewConversation\)/);
+// Batch C guards: the candidate card carries a hidden ee.* static-check
+// warning list that sidepanel.js computes live (no candidate/storage shape
+// change), and the settings drawer exposes the multiAgentPipeline toggle
+// wired to the service-worker setting key of the same name.
+assert.match(html, /id="candidateWarnings" class="hidden"/);
+assert.ok(html.indexOf('id="candidateHint"') < html.indexOf('id="candidateWarnings"'), "candidate warnings must sit beside the card hint");
+assert.ok(references.has("candidateWarnings"), "sidepanel.js must reference elements.candidateWarnings");
+assert.match(script, /elements\.candidateWarnings\.classList\.add\("hidden"\)/);
+assert.match(script, /loadEeApiIndex\(\)/);
+assert.match(script, /validateEeCalls\(candidate\.code, \{/);
+assert.match(script, /link\.rel = "noopener"/);
+assert.match(html, /id="multiAgentPipeline" name="multiAgentPipeline" type="checkbox"/);
+assert.match(html, /计划模式启用多 Agent 流水线（实验性，仅确认生成阶段生效，将增加 token 消耗）/);
+assert.match(script, /elements\.multiAgentPipeline\.checked = currentSettings\.multiAgentPipeline === true/);
+assert.match(script, /multiAgentPipeline: elements\.multiAgentPipeline\.checked/);
+assert.match(styles, /#candidateWarnings\s*\{/);
+// Batch D gap guards: the multiAgentPipeline setting must be wired end to
+// end — service-worker default/save/merge — while the orchestrator keeps the
+// single gating literal, and the local CLI bridge pairing (local-qoder
+// preset ↔ empty-API-Key exemption for http loopback endpoints) stays intact.
+assert.match(serviceWorkerScript, /multiAgentPipeline: false\s*\}\);/, "DEFAULT_SETTINGS must keep the pipeline toggle off");
+assert.match(serviceWorkerScript, /multiAgentPipeline: Boolean\(payload\.multiAgentPipeline\)/, "SETTINGS_SAVE must persist the pipeline toggle");
+assert.match(serviceWorkerScript, /multiAgentPipeline: stored\.multiAgentPipeline === true/, "mergeStoredSettings must normalize the pipeline toggle");
+assert.match(orchestratorScript, /if \(settings\.multiAgentPipeline === true\) return runMultiAgentGeneration\(settings, state, confirmedRevision\);/, "confirmed-plan generation must gate the pipeline on the settings toggle");
+assert.equal((serviceWorkerScript.match(/if \(!apiKey && !isLocalBridgeBaseUrl\(merged\.baseUrl\)\) throw new Error\(/g) || []).length, 2, "chat and streamChat must both apply the local-bridge Key exemption");
+assert.match(serviceWorkerScript, /function isLocalBridgeBaseUrl\(baseUrl\)/, "the local-bridge baseUrl helper must stay defined");
+assert.match(serviceWorkerScript, /\["localhost", "127\.0\.0\.1"\]\.includes\(parsed\.hostname\)/, "the exemption only covers http loopback hosts");
 
 console.log("UI consistency tests passed.");

@@ -7,6 +7,7 @@ import { appendChatEntry, createChatEntry, sanitizeChatHistory, sanitizeChatText
 import { createConsoleContextSection, getConsoleUiState, normalizeConsoleRead } from "./lib/console.js";
 import { alignConversationToUser } from "./lib/conversation.js";
 import { createLineDiff } from "./lib/diff.js";
+import { loadEeApiIndex, validateEeCalls } from "./lib/ee-api-validate.js";
 import { createOrchestrator } from "./lib/orchestrator.js";
 import { CUSTOM_PROVIDER_ID, findProviderPreset, matchProviderPreset } from "./lib/provider-presets.js";
 import {
@@ -290,6 +291,7 @@ async function loadSettings() {
   elements.thinkingEnabled.checked = currentSettings.thinkingEnabled !== false;
   elements.reasoningEffort.value = currentSettings.reasoningEffort === "max" ? "max" : "high";
   elements.compatibleStreaming.checked = currentSettings.compatibleStreaming === true;
+  elements.multiAgentPipeline.checked = currentSettings.multiAgentPipeline === true;
   elements.keyStatus.textContent = currentSettings.hasApiKey
     ? "已配置 API Key（不会在界面中回显）"
     : "尚未配置 API Key";
@@ -356,7 +358,8 @@ async function saveSettings(event) {
         rememberApiKey: elements.rememberApiKey.checked,
         thinkingEnabled: elements.thinkingEnabled.checked,
         reasoningEffort: elements.reasoningEffort.value,
-        compatibleStreaming: elements.compatibleStreaming.checked
+        compatibleStreaming: elements.compatibleStreaming.checked,
+        multiAgentPipeline: elements.multiAgentPipeline.checked
       }
     });
     if (!response?.ok) throw new Error(response?.error || "保存设置失败");
@@ -1849,6 +1852,9 @@ function renderCandidateCard({ scroll = false } = {}) {
       ? "写入前会检查脚本是否被修改；可在 Ace 编辑器中使用 Ctrl+Z 撤销。"
       : "当前脚本未绑定 GEE 标签页。请复制代码并粘贴到 Earth Engine Code Editor；扩展不会自动运行。";
   }
+  elements.candidateWarnings.replaceChildren();
+  elements.candidateWarnings.classList.add("hidden");
+  refreshCandidateWarnings();
   placeCandidateCard();
   elements.candidatePanel.classList.remove("hidden");
   syncConversationEmptyState();
@@ -1859,6 +1865,59 @@ function renderCandidateCard({ scroll = false } = {}) {
   } else if (scroll) {
     updateScrollFollower();
   }
+}
+
+// Live-checks the candidate's `ee.*` symbols against the local official API
+// index on every (re)render, including restored cards. A failed index load or
+// an empty unknown list keeps the warning area hidden (silent degradation).
+function refreshCandidateWarnings() {
+  const createdAt = candidate?.createdAt;
+  loadEeApiIndex()
+    .then((index) => {
+      if (!candidate || candidate.createdAt !== createdAt) return;
+      const result = validateEeCalls(candidate.code, {
+        index,
+        verifiedContext: latestOfficialSourcesText()
+      });
+      if (!result.unknown.length) return;
+      elements.candidateWarnings.replaceChildren(...result.unknown.map(renderCandidateWarning));
+      elements.candidateWarnings.classList.remove("hidden");
+    })
+    .catch(() => undefined);
+}
+
+// Verified context comes from the active plan's official source snapshots
+// (the latest research round); direct-mode cards without a plan pass "".
+function latestOfficialSourcesText() {
+  const sources = orchestrator.getActivePlan()?.sources || [];
+  return sources
+    .map((source) => [source.title, source.datasetId, source.snippet, source.url].filter(Boolean).join(" "))
+    .join("\n");
+}
+
+// Every part of a warning entry is assembled through textContent / setAttribute
+// so index content can never inject markup (XSS-safe).
+function renderCandidateWarning(item) {
+  const entry = document.createElement("li");
+  const symbol = document.createElement("code");
+  symbol.className = "candidate-warning-symbol";
+  symbol.textContent = item.symbol;
+  const note = document.createElement("span");
+  note.textContent = " —— 未在本地官方名单找到";
+  entry.append(symbol, note);
+  if (item.suggestions?.length) {
+    const suggestions = document.createElement("span");
+    suggestions.className = "candidate-warning-suggestions";
+    suggestions.textContent = `；相近候选：${item.suggestions.join(" / ")}`;
+    entry.append(suggestions);
+  }
+  const link = document.createElement("a");
+  link.href = item.url;
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.textContent = "官方文档";
+  entry.append(link);
+  return entry;
 }
 
 function placeCandidateCard() {

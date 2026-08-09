@@ -521,3 +521,26 @@ details.activity-card[open] > summary::before { transform: rotate(90deg); }
   .message.user { margin-left: 18px; }
   .gee-rest-columns { grid-template-columns: 1fr; }
 }
+
+/* Candidate card ee.* static-check warnings (batch C): reuse the amber badge /
+   status palette; each entry carries the symbol, close candidates and an
+   apidocs link. The shared .hidden class keeps the area invisible when empty. */
+#candidateWarnings {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  list-style: none;
+  border: 1px solid #e4b84c;
+  border-radius: 9px;
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+#candidateWarnings li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 4px; }
+#candidateWarnings .candidate-warning-symbol { font-weight: 600; overflow-wrap: anywhere; }
+#candidateWarnings .candidate-warning-suggestions { color: var(--muted); overflow-wrap: anywhere; }
+#candidateWarnings a { flex: none; color: var(--blue-dark); text-decoration: underline; }
+#candidateWarnings a:hover { color: var(--blue); }

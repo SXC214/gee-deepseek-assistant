@@ -43,6 +43,7 @@
               <option value="zhipu">智谱 GLM</option>
               <option value="moonshot">Moonshot Kimi</option>
               <option value="qwen">阿里通义 Qwen</option>
+              <option value="local-qoder">本地 Qoder CLI 桥接</option>
               <option value="custom">自定义</option>
             </select>
           </label>
@@ -91,6 +92,10 @@
             <label class="check-row">
               <input id="compatibleStreaming" name="compatibleStreaming" type="checkbox">
               <span>兼容接口启用流式输出（实验性）</span>
+            </label>
+            <label class="check-row">
+              <input id="multiAgentPipeline" name="multiAgentPipeline" type="checkbox">
+              <span>计划模式启用多 Agent 流水线（实验性，仅确认生成阶段生效，将增加 token 消耗）</span>
             </label>
             <p id="providerCapabilityHint" class="hint">官方 DeepSeek V4 支持实时思考；其他兼容接口会自动使用普通模式。</p>
           </div>
@@ -216,6 +221,7 @@
                 <button id="dismissButton" type="button">关闭代码卡</button>
               </div>
               <p id="candidateHint" class="hint">写入前会检查脚本是否被修改；可在 Ace 编辑器中使用 Ctrl+Z 撤销。</p>
+              <ul id="candidateWarnings" class="hidden"></ul>
             </section>
           </section>
 

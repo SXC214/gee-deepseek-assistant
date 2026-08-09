@@ -12,7 +12,8 @@ assert.ok(Array.isArray(PROVIDER_PRESETS) && PROVIDER_PRESETS.length >= 4, "at l
 for (const preset of PROVIDER_PRESETS) {
   assert.match(preset.id, /^[a-z0-9-]+$/);
   assert.ok(preset.label.length > 0, `${preset.id} must have a label`);
-  assert.ok(new URL(preset.baseUrl).protocol === "https:", `${preset.id} base URL must be https`);
+  const expectedProtocol = preset.id === "local-qoder" ? "http:" : "https:";
+  assert.ok(new URL(preset.baseUrl).protocol === expectedProtocol, `${preset.id} base URL must use the expected protocol`);
   assert.ok(!preset.baseUrl.endsWith("/"), `${preset.id} base URL must not end with a slash`);
   assert.ok(preset.defaultModel.length > 0, `${preset.id} must have a default model`);
 }
