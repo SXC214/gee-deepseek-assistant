@@ -4,7 +4,10 @@
 // 单文件、零 npm 依赖（仅 node: 内置模块），仅监听回环地址。
 //
 // 运行方式：node tools/cli-bridge/server.mjs
-// 环境变量：BRIDGE_PORT / BRIDGE_CLI / BRIDGE_CLI_ARGS / PROXY_API_KEY / BRIDGE_TIMEOUT_MS
+// 环境变量：BRIDGE_PORT / BRIDGE_CLI / BRIDGE_CLI_ARGS / PROXY_API_KEY /
+//           BRIDGE_ALLOW_NO_AUTH / BRIDGE_TIMEOUT_MS
+// 安全基线：未设置 PROXY_API_KEY 时默认拒绝启动；BRIDGE_ALLOW_NO_AUTH=1 是
+// 仅供本地快速试用的显式逃生门。CORS 仅对 chrome-extension:// 来源回显。
 
 import http from "node:http";
 import { spawn } from "node:child_process";
@@ -24,10 +27,11 @@ const STDERR_TAIL_LENGTH = 500;
 // 纯函数（便于单元测试）
 // ---------------------------------------------------------------------------
 
-// 三态授权：key 未配置 → 直接放行（启动时已打 stderr 警告）；
-// 否则要求 Authorization: Bearer <key> 精确匹配。
-export function isAuthorized(headers, key) {
-  if (!key) return true;
+// 三态授权：key 未配置时默认拒绝，仅当启动方显式开启逃生门
+// （BRIDGE_ALLOW_NO_AUTH=1 → allowNoAuth）才放行；配置了 key 则要求
+// Authorization: Bearer <key> 精确匹配。
+export function isAuthorized(headers, key, allowNoAuth = false) {
+  if (!key) return Boolean(allowNoAuth);
   const entries = Object.entries(headers || {});
   const header = entries.find(([name]) => name.toLowerCase() === "authorization");
   if (!header || typeof header[1] !== "string") return false;
@@ -128,6 +132,7 @@ export function loadConfig(env) {
     cli: env.BRIDGE_CLI || "qoderclicn",
     extraArgs: String(env.BRIDGE_CLI_ARGS || "").split(/\s+/).filter(Boolean),
     proxyApiKey: env.PROXY_API_KEY || "",
+    allowNoAuth: env.BRIDGE_ALLOW_NO_AUTH === "1",
     timeoutMs: Number.parseInt(env.BRIDGE_TIMEOUT_MS || "", 10) || DEFAULT_TIMEOUT_MS
   };
 }
@@ -149,11 +154,20 @@ function sendJson(res, status, payload) {
   res.end(body);
 }
 
-function setCorsHeaders(res) {
-  // 扩展页面（chrome-extension:// 源）通过 fetch 访问回环端点时需要 CORS 放行。
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+// CORS 收紧为 chrome-extension:// 来源白名单：仅扩展页面来源回显
+// Access-Control-Allow-Origin，其他 Origin 不下发该头（扩展持
+// host_permissions 不依赖 CORS，浏览器标签直连非目标场景）。
+const EXTENSION_ORIGIN_PATTERN = /^chrome-extension:\/\/[a-z]{32}$/;
+export function buildCorsHeaders(origin) {
+  const headers = {
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    Vary: "Origin"
+  };
+  if (typeof origin === "string" && EXTENSION_ORIGIN_PATTERN.test(origin)) {
+    headers["Access-Control-Allow-Origin"] = origin;
+  }
+  return headers;
 }
 
 function readJsonBody(req) {
@@ -253,7 +267,7 @@ function stderrTail(text) {
 }
 
 function handleChatCompletions(req, res, config) {
-  if (!isAuthorized(req.headers, config.proxyApiKey)) {
+  if (!isAuthorized(req.headers, config.proxyApiKey, config.allowNoAuth)) {
     sendJson(res, 401, errorPayload("Invalid API key for local bridge.", "invalid_request_error"));
     return;
   }
@@ -439,7 +453,9 @@ function runCli(res, config, body, prompt) {
 
 export function createBridgeServer(config) {
   return http.createServer((req, res) => {
-    setCorsHeaders(res);
+    for (const [name, value] of Object.entries(buildCorsHeaders(req.headers.origin))) {
+      res.setHeader(name, value);
+    }
     if (req.method === "OPTIONS") {
       res.writeHead(204);
       res.end();
@@ -471,7 +487,7 @@ export function startServer(config) {
   server.listen(config.port, "127.0.0.1", () => {
     console.log(`[cli-bridge] listening on http://127.0.0.1:${config.port}/v1 (CLI: ${config.cli})`);
     if (!config.proxyApiKey) {
-      console.error("[cli-bridge] 警告：未设置 PROXY_API_KEY，已跳过 Bearer 鉴权（仅限回环访问时方可接受）。");
+      console.error("[cli-bridge] 警告：BRIDGE_ALLOW_NO_AUTH=1 无鉴权模式运行中，本机任何进程均可调用桥接；正式使用请设置 PROXY_API_KEY。");
     }
   });
   return server;
@@ -479,5 +495,13 @@ export function startServer(config) {
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
-  startServer(loadConfig(process.env));
+  const config = loadConfig(process.env);
+  if (!config.proxyApiKey && !config.allowNoAuth) {
+    console.error(
+      "[cli-bridge] 拒绝启动：未设置 PROXY_API_KEY。请设置 PROXY_API_KEY 后再启动；"
+      + "如仅本地快速试用，可设置 BRIDGE_ALLOW_NO_AUTH=1 显式以无鉴权模式启动（不安全，不推荐）。"
+    );
+    process.exit(1);
+  }
+  startServer(config);
 }

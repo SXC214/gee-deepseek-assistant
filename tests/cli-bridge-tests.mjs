@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import {
+  buildCorsHeaders,
   buildPromptFromMessages,
   isAuthorized,
+  loadConfig,
   parseStreamJsonLine,
   streamJsonLineToSse
 } from "../tools/cli-bridge/server.mjs";
@@ -73,14 +75,33 @@ assert.equal(parseStreamJsonLine(JSON.stringify({ type: "result", result: "done"
 assert.equal(parseStreamJsonLine("{oops").kind, "invalid");
 assert.equal(parseStreamJsonLine(JSON.stringify({ type: "system", subtype: "init" })).kind, "other");
 
-// isAuthorized：三态（通过 / 拒绝 / 未配置 Key 跳过）。
+// isAuthorized：配置了 Key 时必须 Bearer 精确匹配。
 assert.equal(isAuthorized({ authorization: "Bearer sk-local-123" }, "sk-local-123"), true);
 assert.equal(isAuthorized({ Authorization: "Bearer sk-local-123" }, "sk-local-123"), true);
 assert.equal(isAuthorized({ authorization: "Bearer wrong-key" }, "sk-local-123"), false);
 assert.equal(isAuthorized({ authorization: "Basic sk-local-123" }, "sk-local-123"), false);
 assert.equal(isAuthorized({}, "sk-local-123"), false);
 assert.equal(isAuthorized(null, "sk-local-123"), false);
-assert.equal(isAuthorized({ authorization: "Bearer anything" }, ""), true);
-assert.equal(isAuthorized({}, undefined), true);
+
+// isAuthorized：无 Key 时默认拒绝；仅显式逃生门（BRIDGE_ALLOW_NO_AUTH=1）放行。
+assert.equal(isAuthorized({ authorization: "Bearer anything" }, ""), false, "no key without escape hatch must reject");
+assert.equal(isAuthorized({}, undefined), false);
+assert.equal(isAuthorized({}, "", true), true, "escape hatch allows unauthenticated local trials");
+assert.equal(isAuthorized({ authorization: "Bearer wrong" }, "sk-local-123", true), false, "a configured key still wins over the escape hatch");
+
+// loadConfig：BRIDGE_ALLOW_NO_AUTH 仅接受字面量 "1"。
+assert.equal(loadConfig({}).allowNoAuth, false);
+assert.equal(loadConfig({ BRIDGE_ALLOW_NO_AUTH: "1" }).allowNoAuth, true);
+assert.equal(loadConfig({ BRIDGE_ALLOW_NO_AUTH: "true" }).allowNoAuth, false);
+
+// buildCorsHeaders：仅 chrome-extension:// 来源白名单回显 ACAO。
+const extensionOrigin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+assert.equal(buildCorsHeaders(extensionOrigin)["Access-Control-Allow-Origin"], extensionOrigin);
+assert.equal(buildCorsHeaders("https://evil.example.com")["Access-Control-Allow-Origin"], undefined, "foreign origins get no ACAO header");
+assert.equal(buildCorsHeaders(undefined)["Access-Control-Allow-Origin"], undefined);
+assert.equal(buildCorsHeaders("chrome-extension://tooshort")["Access-Control-Allow-Origin"], undefined);
+assert.equal(buildCorsHeaders("http://abcdefghijklmnopabcdefghijklmnop")["Access-Control-Allow-Origin"], undefined);
+assert.equal(buildCorsHeaders(extensionOrigin).Vary, "Origin");
+assert.equal(buildCorsHeaders(extensionOrigin)["Access-Control-Allow-Headers"], "Content-Type, Authorization");
 
 console.log("CLI bridge tests passed.");

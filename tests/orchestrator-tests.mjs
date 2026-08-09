@@ -293,6 +293,27 @@ function lastAiChat(calls) {
   assert.equal(errors[0].text, "请先在设置中填写 API Key");
 }
 
+// Local bridge exemption: a loopback baseUrl skips the API key gate (parity
+// with the service-worker exemption), while other endpoints still require it.
+{
+  const { calls, orchestrator } = createHarness({
+    settingsOverride: { hasApiKey: false, baseUrl: "http://127.0.0.1:3000/v1" }
+  });
+  await orchestrator.executePrompt("本地桥接直连", false);
+  const errors = calls.appended.filter((entry) => entry.role === "error");
+  assert.ok(!errors.some((entry) => entry.text === "请先在设置中填写 API Key"), "loopback baseUrl must not require an API Key");
+  assert.ok(calls.aiChats.length >= 1, "the turn must proceed to the model call");
+}
+{
+  const { calls, orchestrator } = createHarness({
+    settingsOverride: { hasApiKey: false, baseUrl: "https://api.example.com/v1" }
+  });
+  await orchestrator.executePrompt("远端缺密钥", false);
+  const errors = calls.appended.filter((entry) => entry.role === "error");
+  assert.equal(errors.length, 1, "non-loopback endpoints still require an API Key");
+  assert.equal(errors[0].text, "请先在设置中填写 API Key");
+}
+
 // Editor context required but unavailable: direct turn aborts early.
 {
   const { deps, calls, orchestrator } = createHarness({ editorState: null });

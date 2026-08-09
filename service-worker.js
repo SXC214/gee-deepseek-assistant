@@ -1057,6 +1057,8 @@ function mergeStoredSettings(value) {
 
 // Local bridges (http://localhost / http://127.0.0.1, any port) accept an
 // empty API Key; every other endpoint still requires one.
+// Keep this implementation identical to isLocalBridgeBaseUrl in lib/api.js
+// (the orchestrator uses that shared copy for the same exemption).
 function isLocalBridgeBaseUrl(baseUrl) {
   try {
     const parsed = new URL(String(baseUrl || ""));

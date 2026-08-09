@@ -390,5 +390,16 @@ assert.match(orchestratorScript, /if \(settings\.multiAgentPipeline === true\) r
 assert.equal((serviceWorkerScript.match(/if \(!apiKey && !isLocalBridgeBaseUrl\(merged\.baseUrl\)\) throw new Error\(/g) || []).length, 2, "chat and streamChat must both apply the local-bridge Key exemption");
 assert.match(serviceWorkerScript, /function isLocalBridgeBaseUrl\(baseUrl\)/, "the local-bridge baseUrl helper must stay defined");
 assert.match(serviceWorkerScript, /\["localhost", "127\.0\.0\.1"\]\.includes\(parsed\.hostname\)/, "the exemption only covers http loopback hosts");
+// CodeReview guard: the loopback Key exemption gains a shared pure function
+// in lib/api.js consumed by the orchestrator settings gate, while the
+// service-worker keeps its pinned identical copy; plan validation warnings
+// are disclosed as a lightweight plan_action transcript line.
+const apiScript = fs.readFileSync(new URL("../lib/api.js", import.meta.url), "utf8");
+assert.match(apiScript, /export function isLocalBridgeBaseUrl\(baseUrl\)/, "lib/api.js must export the shared loopback helper");
+assert.match(apiScript, /\["localhost", "127\.0\.0\.1"\]\.includes\(parsed\.hostname\)/, "the shared helper must keep the same loopback scope");
+assert.match(orchestratorScript, /import \{ isLocalBridgeBaseUrl, isOfficialDeepSeekV4Flash \} from "\.\/api\.js"/, "the orchestrator must consume the shared helper");
+assert.match(orchestratorScript, /if \(!currentSettings\.hasApiKey && !isLocalBridgeBaseUrl\(currentSettings\.baseUrl\)\)/, "requireSettings must skip the Key gate for loopback baseUrls");
+assert.match(orchestratorScript, /校验提示：\$\{activePlan\.planWarnings\.join/, "plan validation warnings must be disclosed to the transcript");
+assert.match(orchestratorScript, /usage 缺失，预算闸依赖调用次数与时限兜底/, "missing usage must be disclosed in pipeline completion/degradation messages");
 
 console.log("UI consistency tests passed.");
