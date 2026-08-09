@@ -325,5 +325,30 @@ assert.match(script, /payload: \{ code: snippet, mode: "insert" \}/);
 assert.match(script, /function injectShpAssetIntoPrompt\(asset\)/);
 assert.match(script, /资产: \$\{asset\.id\}（\$\{asset\.featureCount\} 个要素，bbox \[\$\{bboxText\}\]，字段: \$\{fieldsText\}）/);
 assert.match(script, /async function deleteLocalShpAsset\(assetId\)/);
+// Workspace auto-read connection: the connect button leads the editor action
+// row (读取 moves to the end as the secondary entry), a persistent status
+// slot mirrors the connection state, and the toggle persists under
+// workspaceAutoReadV1. Auto reads reuse the existing read path and are
+// debounced per tab on onActivated / onUpdated-complete events.
+assert.match(html, /id="workspaceConnectButton" class="compact-button" type="button" aria-pressed="false">接入 New script 工作区<\/button>/);
+assert.match(html, /id="workspaceConnectStatus" class="hint workspace-connect-status">未接入<\/p>/);
+assert.ok(html.indexOf('id="workspaceConnectButton"') < html.indexOf('id="runButton"'), "workspace connect button must lead the editor action row");
+assert.ok(html.indexOf('id="runButton"') < html.indexOf('id="geeRestButton"'), "run button must stay second in the editor action row");
+assert.ok(html.indexOf('id="geeRestButton"') < html.indexOf('id="readButton"'), "read button must move to the end of the editor action row");
+assert.ok(references.has("workspaceConnectButton"), "sidepanel.js must reference elements.workspaceConnectButton");
+assert.ok(references.has("workspaceConnectStatus"), "sidepanel.js must reference elements.workspaceConnectStatus");
+assert.match(script, /const WORKSPACE_AUTO_READ_KEY = "workspaceAutoReadV1"/);
+assert.match(script, /elements\.workspaceConnectButton\.addEventListener\("click", connectWorkspace\)/);
+assert.match(script, /async function restoreWorkspaceConnection\(\)/);
+assert.match(script, /await restoreWorkspaceConnection\(\);/);
+assert.match(script, /chrome\.tabs\.onActivated\.addListener/);
+assert.match(script, /changeInfo\.status !== "complete"/);
+assert.match(script, /function autoReadForTab\(tabId\)/);
+assert.match(script, /AUTO_READ_DEBOUNCE_MS/);
+assert.match(script, /elements\.workspaceConnectButton\.disabled = value/);
+// New-conversation entry is a visible text button that keeps the original
+// click handler and confirmation flow.
+assert.match(html, /id="clearChatButton" class="compact-button" type="button" title="清空并新建对话">清空并新建对话<\/button>/);
+assert.match(script, /elements\.clearChatButton\.addEventListener\("click", startNewConversation\)/);
 
 console.log("UI consistency tests passed.");

@@ -181,6 +181,7 @@ textarea:focus {
 .editor-context {
   min-height: 44px;
   flex: none;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 7px 9px;
   border: 1px solid var(--border);
@@ -203,8 +204,10 @@ textarea:focus {
 .editor-context-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editor-context-copy strong { font-size: 12px; }
 .editor-context-copy span { color: var(--muted); font-size: 10px; }
-.editor-actions { flex: none; gap: 5px; }
+.editor-actions { flex: none; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
 .compact-button { min-height: 27px; padding: 3px 8px; font-size: 11px; }
+.workspace-connect-status { flex-basis: 100%; }
+.workspace-connect-status-connected { color: #188038; }
 
 .gee-redirect-row { display: flex; align-items: center; gap: 6px; }
 .gee-redirect-uri {

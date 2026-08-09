@@ -69,6 +69,16 @@ let initializing = false;
 let initRetryButton = null;
 let followConversation = true;
 let consoleReadAttempted = false;
+// Workspace auto-read connection: the toggle persists under
+// workspaceAutoReadV1, and tab switches / completed navigations on the Code
+// Editor trigger one debounced read per tab while connected.
+const WORKSPACE_AUTO_READ_KEY = "workspaceAutoReadV1";
+const AUTO_READ_DEBOUNCE_MS = 8000;
+let workspaceConnected = false;
+let autoReadInFlight = false;
+let lastEditorReadError = "";
+let tabListenersRegistered = false;
+const autoReadTimestamps = new Map();
 let eventsBound = false;
 // ISS-009: plan-question option state lives here so re-rendered plan cards
 // keep their checked option, and answers that already left the input can
@@ -124,6 +134,7 @@ async function initialize() {
     await restoreMessageQueue();
     await restoreActivePlan();
     await restoreLocalShpAssets();
+    await restoreWorkspaceConnection();
     await readEditor({ quiet: true });
     await restoreCandidate();
     initialized = true;
@@ -201,6 +212,8 @@ function bindEvents() {
   elements.readButton.addEventListener("click", async () => {
     await readEditor();
   });
+  elements.workspaceConnectButton.addEventListener("click", connectWorkspace);
+  registerWorkspaceTabListeners();
   elements.runButton.addEventListener("click", runScript);
   elements.geeRestButton.addEventListener("click", () => toggleGeeRestPanel());
   elements.geeRestCloseButton.addEventListener("click", () => toggleGeeRestPanel(false));
@@ -1220,6 +1233,8 @@ async function readEditor({ quiet = false } = {}) {
     elements.connectionBadge.textContent = "已连接";
     elements.connectionBadge.classList.remove("muted");
     elements.editorConnectionDot.classList.add("connected");
+    lastEditorReadError = "";
+    renderWorkspaceConnectStatus();
     if (!quiet) setStatus("代码已读取");
     return editorState;
   } catch (error) {
@@ -1229,6 +1244,8 @@ async function readEditor({ quiet = false } = {}) {
     elements.connectionBadge.textContent = "未连接";
     elements.connectionBadge.classList.add("muted");
     elements.editorConnectionDot.classList.remove("connected");
+    lastEditorReadError = safeError(error);
+    renderWorkspaceConnectStatus();
     if (!quiet) showError(error);
     return null;
   }
@@ -1242,6 +1259,85 @@ function renderConsoleReadStatus(consoleRead = editorState?.consoleRead) {
   elements.includeConsoleLabel.textContent = view.label;
   elements.consoleContextChip.title = view.title;
   elements.includeConsole.setAttribute("aria-label", `${view.label}。${view.title}`);
+}
+
+function renderWorkspaceConnectStatus() {
+  let text;
+  if (!workspaceConnected) {
+    text = "未接入";
+  } else if (editorState) {
+    text = `已接入 · 代码已自动读取（${editorState.code.length.toLocaleString()} 字符）`;
+  } else {
+    text = lastEditorReadError
+      ? `已接入 · 读取失败：${lastEditorReadError}`
+      : "已接入 · 等待读取编辑器";
+  }
+  elements.workspaceConnectStatus.textContent = text;
+  elements.workspaceConnectStatus.classList.toggle("workspace-connect-status-connected", workspaceConnected && Boolean(editorState));
+  elements.workspaceConnectButton.setAttribute("aria-pressed", String(workspaceConnected));
+}
+
+async function restoreWorkspaceConnection() {
+  try {
+    const stored = await chrome.storage.local.get(WORKSPACE_AUTO_READ_KEY);
+    workspaceConnected = stored?.[WORKSPACE_AUTO_READ_KEY] === true;
+  } catch {
+    workspaceConnected = false;
+  }
+  renderWorkspaceConnectStatus();
+}
+
+function persistWorkspaceConnection() {
+  return chrome.storage.local.set({ [WORKSPACE_AUTO_READ_KEY]: workspaceConnected })
+    .catch((error) => console.warn("工作区接入状态保存失败：", error));
+}
+
+// Clicking while disconnected runs the same manual read as 读取 and enters
+// the connected state; clicking while connected simply refreshes once.
+async function connectWorkspace() {
+  if (!workspaceConnected) {
+    workspaceConnected = true;
+    renderWorkspaceConnectStatus();
+    await persistWorkspaceConnection();
+  }
+  await readEditor();
+}
+
+function registerWorkspaceTabListeners() {
+  if (tabListenersRegistered) return;
+  tabListenersRegistered = true;
+  chrome.tabs.onActivated.addListener((activeInfo) => autoReadForTab(activeInfo.tabId));
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (changeInfo.status !== "complete" || !tab?.active) return;
+    autoReadForTab(tabId);
+  });
+}
+
+// Debounced per tab: consecutive onUpdated storms on the same tab trigger at
+// most one read inside the window, and overlapping reads are skipped.
+async function autoReadForTab(tabId) {
+  if (!workspaceConnected || autoReadInFlight) return;
+  let tab = null;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    return;
+  }
+  if (!tab?.url?.startsWith("https://code.earthengine.google.com/")) return;
+  const now = Date.now();
+  if (now - (autoReadTimestamps.get(tabId) || 0) < AUTO_READ_DEBOUNCE_MS) return;
+  autoReadTimestamps.set(tabId, now);
+  autoReadInFlight = true;
+  try {
+    const state = await readEditor({ quiet: true });
+    if (state) {
+      setStatus("代码已读取");
+    } else {
+      setStatus(`自动读取失败：${lastEditorReadError || "编辑器页面未就绪"}`);
+    }
+  } finally {
+    autoReadInFlight = false;
+  }
 }
 
 async function sendPrompt(event) {
@@ -2067,6 +2163,7 @@ function setBusy(value) {
   elements.sendButton.textContent = value ? "排队" : "发送";
   elements.stopButton.classList.toggle("hidden", !value);
   elements.readButton.disabled = value;
+  elements.workspaceConnectButton.disabled = value;
   refreshTurnStateBadge();
   elements.turnStateBadge.classList.toggle("muted", !value);
   elements.turnStateBadge.classList.toggle("processing", value);
