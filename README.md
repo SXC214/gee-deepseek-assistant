@@ -27,11 +27,6 @@
 - 顶部“＋”用于开始新对话；会先确认，再清除当前聊天、计划、代码卡和后续队列，不影响 GEE 编辑器脚本。
 - Earth Engine REST 直连：配置独立 OAuth 客户端后，可在侧边栏浏览项目资产与任务、复制资产 ID 并注入对话；令牌只保存在浏览器会话中。
 - 上传 Shapefile：在「资产 / 任务」面板把整套 shapefile（必需 `.shp`/`.shx`/`.dbf`，可选 `.prj`/`.cpg`）入库为云端 Table 资产；云端不可用时经确认后降级为本地 GeoJSON 条目，仍可注入脚本与对话。
-- 性能守则注入与 Console 报错诊断：直答与编码系统提示词内置 GEE 性能守则（先 filter 缩小集合、大范围 reduce 用 bestEffort/maxPixels、Export 分块、避免无界 map）做事前规避；Console 读取成功后自动匹配已知 GEE 运行时报错模式（`lib/gee-errors.js`）生成针对性诊断段，未读取状态绝不喂给模型。
-- 前置检索增强：代码意图（生成/修改脚本、围栏代码、ee.* 引用）的检索查询会自动追加提示词与选区中的 ee.* 符号列表，让官方资料检索直接服务于符号用法核验。
-- 候选代码 ee.* 校验警告：候选代码卡按随扩展打包的官方 ee.* API 名单做静态检查（`lib/ee-api-validate.js`），未在名单中找到的符号连同修正候选实时列在警告区，只提醒不阻断应用。
-- 计划模式多 Agent 流水线（实验性开关）：设置中勾选“计划模式启用多 Agent 流水线”后，确认生成阶段按研究员→编码员→审查员流水线执行（含括号/lint/保留标识符/ee.* 符号确定性检查与最多一轮修订），全程披露调用次数与 token 用量；任何环节失败都会披露并回退单轮生成。
-- 本地 CLI 桥接与本地模型接入：`tools/cli-bridge` 提供仅绑定回环地址的 OpenAI 兼容本地桥接；服务商预设「本地 Qoder CLI 桥接」一键填充地址与模型，http://localhost 或 http://127.0.0.1 端点允许留空 API Key，也可改填 Ollama、LM Studio 等本地 OpenAI 兼容服务地址。
 
 ## 安装
 
@@ -145,9 +140,6 @@ Earth Engine 没有公开的 Code Editor 插件接口。如果 Google 更新页�
 - Dataset Search 与 Docs Search 依赖 `developers.google.com` 可达；该站点不可达时检索功能无法使用。
 - Shapefile 云端上传的字节暂存通道（`geturl` / `_ah/upload`）是未文档化接口，可能随 Google 变更而失效；失效时功能会自动引导降级到本地解析路径。
 - Shapefile 上传各项上限：云端直传整套 8MB；本地解析整套 32MB、要素数 50000、注入片段 1MB；仅支持 2D 点/线/面（Z 值降维）与 dBase III 属性；`.prj` 非 EPSG:4326 会直接拒绝，不做重投影。
-- ee.* API 名单（`lib/ee-api-index.json`）是静态快照（当前生成于 2026-08-09，来源见文件内 `sourceUrl`）；官方 API 更新后名单滞后时，合法的新符号可能被标为未知，警告措辞会注明名单生成时间与来源。重新生成名单：`node tools/build-ee-api-index.mjs`。名单加载失败时静态校验自动跳过并给出提示，不阻断候选代码展示与应用；实例链调用（如 `image.ndvi()`）无法静态解析，不在校验范围。
-- 多 Agent 流水线成本：一次确认生成最多 5 次模型调用、共享 150k token 预算、5 分钟时限（含最多一轮修订与终审）；超出任一项即披露原因并回退单轮生成。实验性开关默认关闭，仅在计划确认生成阶段生效。
-- CLI 桥接安全与合规：`tools/cli-bridge` 只绑定本机回环地址，把 OpenAI 兼容请求转发给本地 Qoder CLI，不监听公网、不代理外部流量；空 API Key 豁免仅对 http://localhost 与 http://127.0.0.1 生效。使用前请自行确认该本地转发方式符合 Qoder 服务条款及所调用模型的许可协议。
 
 ## 开发与测试
 

@@ -6,7 +6,6 @@ const html = fs.readFileSync(new URL("../sidepanel.html", import.meta.url), "utf
 const script = fs.readFileSync(new URL("../sidepanel.js", import.meta.url), "utf8");
 const orchestratorScript = fs.readFileSync(new URL("../lib/orchestrator.js", import.meta.url), "utf8");
 const storageScript = fs.readFileSync(new URL("../lib/storage.js", import.meta.url), "utf8");
-const serviceWorkerScript = fs.readFileSync(new URL("../service-worker.js", import.meta.url), "utf8");
 const styles = fs.readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 const manifest = JSON.parse(fs.readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
 const packageJson = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -136,12 +135,6 @@ assert.match(orchestratorScript, /parsePlanResponse\(stripFencedCodeBlocks\(rawC
 assert.match(orchestratorScript, /premature\.prematurePlanCode = true/);
 assert.match(orchestratorScript, /模型在计划阶段提前返回了代码，已忽略未应用/);
 assert.match(orchestratorScript, /if \(error\?\.prematurePlanCode\)/);
-// ISS-015 regression guard: both planning system prompts clarify that static
-// spatial datasets (boundaries/masks used only to define the study area)
-// never participate in temporal coverage validation.
-assert.match(orchestratorScript, /静态\/非时序空间数据集/);
-assert.match(orchestratorScript, /不参与时间覆盖校验/);
-assert.match(orchestratorScript, /5\.1 静态\/非时序空间数据集/);
 assert.match(styles, /\.status-error\s*\{[\s\S]*?white-space:\s*normal/);
 assert.match(styles, /html,[\s\S]*?body\s*\{[\s\S]*?overflow:\s*hidden/);
 assert.match(styles, /\.conversation\s*\{[\s\S]*?overflow-y:\s*auto/);
@@ -363,43 +356,5 @@ assert.match(script, /elements\.workspaceConnectButton\.disabled = value/);
 // click handler and confirmation flow.
 assert.match(html, /id="clearChatButton" class="compact-button" type="button" title="清空并新建对话">清空并新建对话<\/button>/);
 assert.match(script, /elements\.clearChatButton\.addEventListener\("click", startNewConversation\)/);
-// Batch C guards: the candidate card carries a hidden ee.* static-check
-// warning list that sidepanel.js computes live (no candidate/storage shape
-// change), and the settings drawer exposes the multiAgentPipeline toggle
-// wired to the service-worker setting key of the same name.
-assert.match(html, /id="candidateWarnings" class="hidden"/);
-assert.ok(html.indexOf('id="candidateHint"') < html.indexOf('id="candidateWarnings"'), "candidate warnings must sit beside the card hint");
-assert.ok(references.has("candidateWarnings"), "sidepanel.js must reference elements.candidateWarnings");
-assert.match(script, /elements\.candidateWarnings\.classList\.add\("hidden"\)/);
-assert.match(script, /loadEeApiIndex\(\)/);
-assert.match(script, /validateEeCalls\(candidate\.code, \{/);
-assert.match(script, /link\.rel = "noopener"/);
-assert.match(html, /id="multiAgentPipeline" name="multiAgentPipeline" type="checkbox"/);
-assert.match(html, /计划模式启用多 Agent 流水线（实验性，仅确认生成阶段生效，将增加 token 消耗）/);
-assert.match(script, /elements\.multiAgentPipeline\.checked = currentSettings\.multiAgentPipeline === true/);
-assert.match(script, /multiAgentPipeline: elements\.multiAgentPipeline\.checked/);
-assert.match(styles, /#candidateWarnings\s*\{/);
-// Batch D gap guards: the multiAgentPipeline setting must be wired end to
-// end — service-worker default/save/merge — while the orchestrator keeps the
-// single gating literal, and the local CLI bridge pairing (local-qoder
-// preset ↔ empty-API-Key exemption for http loopback endpoints) stays intact.
-assert.match(serviceWorkerScript, /multiAgentPipeline: false\s*\}\);/, "DEFAULT_SETTINGS must keep the pipeline toggle off");
-assert.match(serviceWorkerScript, /multiAgentPipeline: Boolean\(payload\.multiAgentPipeline\)/, "SETTINGS_SAVE must persist the pipeline toggle");
-assert.match(serviceWorkerScript, /multiAgentPipeline: stored\.multiAgentPipeline === true/, "mergeStoredSettings must normalize the pipeline toggle");
-assert.match(orchestratorScript, /if \(settings\.multiAgentPipeline === true\) return runMultiAgentGeneration\(settings, state, confirmedRevision\);/, "confirmed-plan generation must gate the pipeline on the settings toggle");
-assert.equal((serviceWorkerScript.match(/if \(!apiKey && !isLocalBridgeBaseUrl\(merged\.baseUrl\)\) throw new Error\(/g) || []).length, 2, "chat and streamChat must both apply the local-bridge Key exemption");
-assert.match(serviceWorkerScript, /function isLocalBridgeBaseUrl\(baseUrl\)/, "the local-bridge baseUrl helper must stay defined");
-assert.match(serviceWorkerScript, /\["localhost", "127\.0\.0\.1"\]\.includes\(parsed\.hostname\)/, "the exemption only covers http loopback hosts");
-// CodeReview guard: the loopback Key exemption gains a shared pure function
-// in lib/api.js consumed by the orchestrator settings gate, while the
-// service-worker keeps its pinned identical copy; plan validation warnings
-// are disclosed as a lightweight plan_action transcript line.
-const apiScript = fs.readFileSync(new URL("../lib/api.js", import.meta.url), "utf8");
-assert.match(apiScript, /export function isLocalBridgeBaseUrl\(baseUrl\)/, "lib/api.js must export the shared loopback helper");
-assert.match(apiScript, /\["localhost", "127\.0\.0\.1"\]\.includes\(parsed\.hostname\)/, "the shared helper must keep the same loopback scope");
-assert.match(orchestratorScript, /import \{ isLocalBridgeBaseUrl, isOfficialDeepSeekV4Flash \} from "\.\/api\.js"/, "the orchestrator must consume the shared helper");
-assert.match(orchestratorScript, /if \(!currentSettings\.hasApiKey && !isLocalBridgeBaseUrl\(currentSettings\.baseUrl\)\)/, "requireSettings must skip the Key gate for loopback baseUrls");
-assert.match(orchestratorScript, /校验提示：\$\{activePlan\.planWarnings\.join/, "plan validation warnings must be disclosed to the transcript");
-assert.match(orchestratorScript, /usage 缺失，预算闸依赖调用次数与时限兜底/, "missing usage must be disclosed in pipeline completion/degradation messages");
 
 console.log("UI consistency tests passed.");
