@@ -2,29 +2,39 @@
 
 _Last updated: 2026-08-18_
 
-## 我们不收集、不留存任何数据 / We collect and retain no data
+## 数据处理概览 / Data processing overview
 
-GEE AI Code Assistant（下称「本扩展」）不收集、不上传、不向任何第三方转发你的个人数据、代码、对话内容或遥测信息。本扩展没有自己的服务器，也没有任何统计或追踪组件。
+GEE AI Code Assistant（下称「本扩展」）的开发者不运营数据收集或中转服务器，也无法访问你的数据。本扩展没有广告、统计或追踪组件。为提供明确展示的 Earth Engine 编程助手功能，本扩展会在你的设备上处理和保存部分数据，并仅在你主动操作时将必要内容直接发送到你选择的模型服务商或 Google Earth Engine。
 
-GEE AI Code Assistant ("the extension") does not collect, upload, or forward your personal data, code, conversations, or telemetry to any third party. It operates entirely in your browser and has no server or analytics component.
+The developer of GEE AI Code Assistant ("the extension") operates no data-collection or relay server and cannot access your data. The extension contains no advertising, analytics, or tracking component. To provide its disclosed Earth Engine coding-assistant features, it processes and stores some data on your device and, only in response to your actions, sends necessary content directly to the model provider you choose or to Google Earth Engine.
 
 ## 会话内容的去向 / Where your conversations go
 
-你输入的提示词与生成的代码，只在你点击发送时直接传输到**你自行配置**的模型服务商（OpenAI Chat Completions 兼容端点，例如 DeepSeek、智谱、Moonshot、阿里通义，或本地模型如 Ollama）。这些数据由该第三方模型服务商按其自身隐私政策处理，本扩展不介入、不中转、不留存。
+你输入的提示词，以及你选择提供的 Earth Engine 脚本、选区、Console 输出、资产或任务上下文，只在你发起请求时直接传输到**你自行配置**的模型服务商（OpenAI Chat Completions 兼容端点，例如 DeepSeek、智谱、Moonshot、阿里通义，或本地模型如 Ollama）。模型服务商会按其自身隐私政策处理这些数据；扩展开发者不介入、不中转，也无法访问这些传输。
 
-Prompts and generated code are sent, only when you press send, directly to the model provider **you configure yourself**. That provider handles the data under its own privacy policy; the extension neither relays nor stores it.
+Your prompts and the Earth Engine script, selection, Console output, asset, or task context you choose to provide are sent directly to the model provider **you configure yourself**, only when you initiate a request. That provider processes the data under its own privacy policy; the extension developer does not relay and cannot access these transmissions.
+
+模型返回的 GEE 源代码会先作为文本显示供你审阅。扩展不会通过 `eval`、`new Function` 或远程脚本把回复作为扩展逻辑执行；只有在你明确确认后，代码文本才会写入 Earth Engine 编辑器。如你另行确认运行，代码由 Earth Engine Code Editor 在其自身环境中执行。
+
+GEE source code returned by the model is first displayed as text for your review. The extension does not use `eval`, `new Function`, or remote scripts to execute a response as extension logic. Code text is written to the Earth Engine editor only after your explicit confirmation. If you separately confirm Run, it is executed by the Earth Engine Code Editor in its own environment.
 
 ## 本地存储 / Local storage
 
-对话记录、计划历史、代码卡快照保存在你本机的浏览器存储（`chrome.storage`）中。API Key 默认仅保存在浏览器会话中；如你选择持久保存，也仅存于本机。你可随时通过清除浏览器数据或扩展内的「清空对话」删除这些数据。
+设置、对话记录、计划历史、代码卡快照、文档缓存以及可选的本地 Shapefile 条目保存在你本机的浏览器存储（`chrome.storage`）中。API Key 默认仅保存在浏览器会话中；如你选择持久保存，也仅存于本机。Google Earth Engine OAuth 访问令牌仅保存在当前浏览器会话中。你可通过扩展内的清除功能、移除扩展或清除浏览器扩展数据来删除这些数据。
 
-Conversation history, plan history, and code-card snapshots are stored in your browser's local storage. API keys are kept in the browser session by default and, if you opt in to persist them, remain on your device only. You can delete this data at any time.
+Settings, conversation history, plan history, code-card snapshots, documentation caches, and optional local Shapefile entries are stored in your browser's `chrome.storage`. API keys are session-only by default and remain on your device if you opt in to persistent storage. Google Earth Engine OAuth access tokens are kept only for the current browser session. You can delete this data using the extension's clearing controls, by removing the extension, or by clearing browser extension data.
 
 ## 第三方服务责任边界 / Third-party services
 
-本扩展可能与你自行配置的第三方模型服务、以及 Google 的公开文档与 Earth Engine API 交互。这些服务由各自提供方运营并适用其各自隐私政策。本扩展不是 Google 官方产品，与 Google 无关联，也不内嵌任何 Google OAuth 凭据；你的 Google 凭据仅在你与 Google 之间流转。
+本扩展可能与你自行配置的第三方模型服务、Google Developers 公开文档以及 Google Earth Engine API 交互。你选择上传的 Shapefile 会直接发送到 Google Earth Engine。上述服务由各自提供方运营并适用其各自隐私政策。本扩展不是 Google 官方产品，与 Google 无关联，也不内嵌任何 Google OAuth 凭据；Google OAuth 令牌仅发送给 Google Earth Engine API。
 
-The extension may interact with third-party model services you configure, Google's public documentation, and the Earth Engine API. Those services are operated under their own privacy policies. The extension is not a Google product, is not affiliated with Google, embeds no Google OAuth credentials, and your Google credentials flow only between you and Google.
+The extension may interact with third-party model services you configure, public Google Developers documentation, and the Google Earth Engine API. Shapefiles you choose to upload are sent directly to Google Earth Engine. Those services operate under their own privacy policies. The extension is not a Google product, is not affiliated with Google, embeds no Google OAuth credentials, and Google OAuth tokens are sent only to Google Earth Engine APIs.
+
+## 有限使用承诺 / Limited Use disclosure
+
+从 Google API 获得的信息，其使用将遵守 Chrome Web Store 用户数据政策，包括 Limited Use（有限使用）要求。数据仅用于提供本扩展明确披露的单一用途，不用于个性化广告、信用评估、数据销售或任何无关用途。
+
+The use of information received from Google APIs will adhere to the Chrome Web Store User Data Policy, including the Limited Use requirements. Data is used only to provide the extension's disclosed single purpose and is not used for personalized advertising, credit assessment, data sales, or unrelated purposes.
 
 ## 联系 / Contact
 

@@ -90,58 +90,22 @@ English: These are optional host permissions and are never granted upfront. When
 
 ## 3. 数据用途申报要点（Data Use Disclosures）
 
-供填写商店「数据用途 / Data use」与隐私实践问卷时参考。
+完整的逐字段粘贴文案见 [`privacy-practices.md`](./privacy-practices.md)。填写时不得选择“扩展不处理用户数据”，因为扩展会在本机处理并按用户操作传输网站内容、用户生成内容和身份验证信息。
 
-- **不收集任何个人数据**：扩展不收集、不上传、不留存任何用户个人身份信息或遥测数据。
-  *Collects no personal data; no telemetry of any kind.*
+- **开发者没有数据收集服务器**：开发者无法访问用户数据，扩展也没有广告、统计或追踪组件；但扩展本身会处理 Earth Engine 脚本、Console、提示词、API Key、OAuth 令牌和用户选择的 Shapefile。
+  *The developer operates no data-collection server and cannot access user data, but the extension itself handles website content, user-generated content, and authentication information.*
 - **出站网络请求仅三类，且均由用户主动发起**：
   1. 用户自行配置的模型 API（OpenAI 兼容端点，含本地模型）。
   2. `developers.google.com`：检索 Earth Engine 官方公开文档与数据目录（无需凭据）。
   3. `earthengine.googleapis.com`：使用用户自有 OAuth 令牌访问用户自己的 Earth Engine REST 资源。
 - **API Key 仅存本机**：默认保存在浏览器会话中；用户可选择在本机 `chrome.storage` 持久保存。Key 从不发送给 Earth Engine 页面、content script 或任何第三方服务器。
-- **无远程代码执行**：扩展不从远程加载或执行任何代码；全部逻辑为本地静态脚本。
+- **无远程扩展代码**：全部扩展逻辑均包含在 ZIP 内；模型返回的 GEE 代码先作为文本显示，扩展不通过 `eval`、`new Function` 或远程脚本将其作为扩展逻辑执行。
 
 ---
 
 ## 4. 简易隐私政策（Privacy Policy）
 
-以下 Markdown 单页可直接发布到 GitHub Pages（建议发布后将其 URL 填入商店「隐私政策」栏）。同目录下已同步生成 [`privacy-policy.md`](./privacy-policy.md)，内容与本段一致。
-
-```markdown
-# GEE AI Code Assistant — Privacy Policy
-
-_Last updated: 2026-08-18_
-
-## 我们不收集、不留存任何数据 / We collect and retain no data
-
-GEE AI Code Assistant（下称「本扩展」）不收集、不上传、不向任何第三方转发你的个人数据、代码、对话内容或遥测信息。本扩展没有自己的服务器，也没有任何统计或追踪组件。
-
-GEE AI Code Assistant ("the extension") does not collect, upload, or forward your personal data, code, conversations, or telemetry to any third party. It operates entirely in your browser and has no server or analytics component.
-
-## 会话内容的去向 / Where your conversations go
-
-你输入的提示词与生成的代码，只在你点击发送时直接传输到**你自行配置**的模型服务商（OpenAI Chat Completions 兼容端点，例如 DeepSeek、智谱、Moonshot、阿里通义，或本地模型如 Ollama）。这些数据由该第三方模型服务商按其自身隐私政策处理，本扩展不介入、不中转、不留存。
-
-Prompts and generated code are sent, only when you press send, directly to the model provider **you configure yourself**. That provider handles the data under its own privacy policy; the extension neither relays nor stores it.
-
-## 本地存储 / Local storage
-
-对话记录、计划历史、代码卡快照保存在你本机的浏览器存储（`chrome.storage`）中。API Key 默认仅保存在浏览器会话中；如你选择持久保存，也仅存于本机。你可随时通过清除浏览器数据或扩展内的「清空对话」删除这些数据。
-
-Conversation history, plan history, and code-card snapshots are stored in your browser's local storage. API keys are kept in the browser session by default and, if you opt in to persist them, remain on your device only. You can delete this data at any time.
-
-## 第三方服务责任边界 / Third-party services
-
-本扩展可能与你自行配置的第三方模型服务、以及 Google 的公开文档与 Earth Engine API 交互。这些服务由各自提供方运营并适用其各自隐私政策。本扩展不是 Google 官方产品，与 Google 无关联，也不内嵌任何 Google OAuth 凭据；你的 Google 凭据仅在你与 Google 之间流转。
-
-The extension may interact with third-party model services you configure, Google's public documentation, and the Earth Engine API. Those services are operated under their own privacy policies. The extension is not a Google product, is not affiliated with Google, embeds no Google OAuth credentials, and your Google credentials flow only between you and Google.
-
-## 联系 / Contact
-
-如有隐私相关问题，请通过本项目的 GitHub 仓库 Issues 联系我们。
-
-For privacy questions, please open an issue on this project's GitHub repository.
-```
+将同目录的 [`privacy-policy.md`](./privacy-policy.md) 发布到一个无需登录即可访问的 HTTPS 页面（例如 GitHub Pages），然后把公开 URL 填入商店「Privacy policy」栏。该版本已准确披露本地存储、模型服务商传输、Google Earth Engine API、Shapefile 上传、远程代码边界以及 Limited Use 承诺。
 
 ---
 
