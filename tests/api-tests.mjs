@@ -3,7 +3,8 @@ import {
   buildChatRequestBody,
   isOfficialDeepSeekV4,
   isOfficialDeepSeekV4Flash,
-  isValidReasoningEffort
+  isValidReasoningEffort,
+  normalizeChatMessages
 } from "../lib/api.js";
 
 const messages = [{ role: "user", content: "计算 NDVI" }];
@@ -69,6 +70,51 @@ assert.equal(official.stream, true);
 assert.deepEqual(official.stream_options, { include_usage: true });
 assert.deepEqual(official.response_format, { type: "json_object" });
 
+const toolMessages = normalizeChatMessages([
+  { role: "user", content: "核验数据集" },
+  {
+    role: "assistant",
+    content: "",
+    reasoning_content: "需要查询目录",
+    tool_calls: [{
+      id: "call_1",
+      type: "function",
+      function: { name: "search_gee_datasets", arguments: '{"query":"Sentinel-2"}' }
+    }]
+  },
+  { role: "tool", tool_call_id: "call_1", content: '{"ok":true}' }
+]);
+assert.equal(toolMessages[1].reasoning_content, "需要查询目录");
+assert.equal(toolMessages[1].tool_calls[0].function.name, "search_gee_datasets");
+assert.equal(toolMessages[2].tool_call_id, "call_1");
+
+const officialTools = buildChatRequestBody({
+  model: "deepseek-v4-flash",
+  messages: toolMessages,
+  settings: { baseUrl: "https://api.deepseek.com", thinkingEnabled: true },
+  purpose: "plan_research",
+  tools: [{
+    type: "function",
+    function: {
+      name: "search_gee_datasets",
+      description: "Search the official catalog",
+      parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] }
+    }
+  }]
+});
+assert.equal(officialTools.tools[0].function.name, "search_gee_datasets");
+assert.equal("tool_choice" in officialTools, false, "thinking tool requests rely on DeepSeek's default auto routing");
+assert.equal("response_format" in officialTools, false, "tool turns rely on final schema validation");
+const toolsDisabled = buildChatRequestBody({
+  model: "deepseek-v4-flash",
+  messages,
+  settings: { baseUrl: "https://api.deepseek.com", thinkingEnabled: true },
+  tools: officialTools.tools,
+  toolChoice: "none"
+});
+assert.equal(toolsDisabled.tool_choice, "none", "an explicit tool opt-out remains serializable");
+assert.throws(() => normalizeChatMessages([{ role: "tool", content: "x" }]), /tool_call_id/);
+
 const disabled = buildChatRequestBody({
   model: "deepseek-v4-pro", messages,
   settings: { baseUrl: "https://api.deepseek.com", thinkingEnabled: false, reasoningEffort: "max" }
@@ -86,6 +132,7 @@ assert.equal("thinking" in compatibility, false);
 assert.equal("reasoning_effort" in compatibility, false);
 assert.equal("stream_options" in compatibility, false);
 assert.equal("response_format" in compatibility, false);
+assert.equal("tools" in compatibility, false, "compatible endpoints do not receive resident DeepSeek tools");
 
 // compatibleStreaming opt-in stays off by default: generic endpoints keep the
 // non-streaming shape even when the caller requests streaming.

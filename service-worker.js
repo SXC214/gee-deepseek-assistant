@@ -6,7 +6,7 @@ import {
   rankEntries,
   selectDatasetCandidates
 } from "./lib/search.js";
-import { buildChatRequestBody, isOfficialDeepSeekV4, isValidReasoningEffort } from "./lib/api.js";
+import { buildChatRequestBody, isOfficialDeepSeekV4, isValidReasoningEffort, normalizeChatMessages } from "./lib/api.js";
 import { consumeSseResponse } from "./lib/sse.js";
 import { RETRYABLE_STATUSES, createSemaphore, fetchWithPolicy, waitInterruptible } from "./lib/http.js";
 import { buildAuthUrl, importTable, listAssets, listTasks, parseAuthFragment, pollOperation, verifyOAuthState } from "./lib/gee-rest.js";
@@ -436,7 +436,8 @@ async function chat(payload) {
       messages: normalizeMessages(payload.messages),
       settings: merged,
       purpose: payload.purpose || "direct",
-      stream: false
+      stream: false,
+      tools: payload.tools || []
     });
     if (body.stream) throw new Error("官方 DeepSeek V4 请求必须使用流式连接");
 
@@ -473,17 +474,20 @@ async function chat(payload) {
         throw new Error(`模型请求失败：${detail}`);
       }
 
-      const content = data?.choices?.[0]?.message?.content;
-      if (typeof content !== "string") {
+      const message = data?.choices?.[0]?.message || {};
+      const content = typeof message.content === "string" ? message.content : "";
+      const toolCalls = normalizeCompletedToolCalls(message.tool_calls);
+      if (!content && !toolCalls.length) {
         throw new Error("模型响应中没有 choices[0].message.content");
       }
       return {
         ok: true,
         requestId,
         content,
-        reasoningContent: typeof data?.choices?.[0]?.message?.reasoning_content === "string"
-          ? data.choices[0].message.reasoning_content
+        reasoningContent: typeof message.reasoning_content === "string"
+          ? message.reasoning_content
           : "",
+        toolCalls,
         usage: data.usage || null,
         finishReason: data?.choices?.[0]?.finish_reason || null
       };
@@ -522,12 +526,15 @@ async function streamChat(payload, port) {
       messages: normalizeMessages(payload.messages),
       settings: merged,
       purpose: payload.purpose || "direct",
-      stream: true
+      stream: true,
+      tools: payload.tools || []
     });
 
     let lastError = null;
     for (let attempt = 0; attempt <= STREAM_RETRY_LIMIT; attempt += 1) {
       let content = "";
+      let reasoningContent = "";
+      let toolCalls = [];
       let usage = null;
       let sawReasoning = false;
       let timedOut = false;
@@ -580,12 +587,15 @@ async function streamChat(payload, port) {
             armEventTimeout(__timings.streamIdleTimeoutMs);
             if (event.type === "REASONING_DELTA") {
               sawReasoning = true;
+              reasoningContent += event.delta;
               safePortPost(port, { type: "REASONING_DELTA", requestId, delta: event.delta });
             } else if (event.type === "CONTENT_DELTA") {
               content += event.delta;
               safePortPost(port, { type: "CONTENT_DELTA", requestId, delta: event.delta });
             } else if (event.type === "USAGE") {
               usage = event.usage;
+            } else if (event.type === "TOOL_CALL_DELTA") {
+              toolCalls = mergeToolCallDeltas(toolCalls, event.toolCalls);
             }
           }
         });
@@ -598,7 +608,8 @@ async function streamChat(payload, port) {
           throw abortError;
         }
         if (!state.done) throw markTransient(new Error("模型流式响应在完成标记前中断"));
-        if (!content) {
+        toolCalls = normalizeCompletedToolCalls(toolCalls);
+        if (!content && !toolCalls.length) {
           throw new Error(sawReasoning
             ? "模型仅返回了思考内容，没有生成最终回答，请重试或调整提问"
             : "模型没有返回有效内容，请重试");
@@ -607,6 +618,8 @@ async function streamChat(payload, port) {
           type: "DONE",
           requestId,
           content,
+          reasoningContent,
+          toolCalls,
           usage: usage || state.usage || null,
           finishReason: state.finishReason || null
         });
@@ -621,6 +634,7 @@ async function streamChat(payload, port) {
           && !controller.signal.aborted
           && !content
           && !sawReasoning
+          && !toolCalls.length
           && isTransientStreamError(error);
         if (!canRetry) throw error;
         await waitInterruptible(__timings.streamRetryDelayMs, controller.signal);
@@ -1015,13 +1029,41 @@ function formatOfficialContext(sources) {
 }
 
 function normalizeMessages(messages) {
-  if (!Array.isArray(messages) || messages.length === 0) {
-    throw new Error("缺少对话内容");
+  return normalizeChatMessages(messages);
+}
+
+function mergeToolCallDeltas(current, deltas) {
+  const merged = Array.isArray(current) ? current.map((call) => ({
+    ...call,
+    function: { ...(call.function || {}) }
+  })) : [];
+  for (const delta of Array.isArray(deltas) ? deltas : []) {
+    const index = Number.isInteger(delta?.index) && delta.index >= 0 ? delta.index : merged.length;
+    const existing = merged[index] || { id: "", type: "function", function: { name: "", arguments: "" } };
+    if (typeof delta?.id === "string") existing.id += delta.id;
+    if (typeof delta?.type === "string") existing.type = delta.type;
+    if (typeof delta?.function?.name === "string") existing.function.name += delta.function.name;
+    if (typeof delta?.function?.arguments === "string") existing.function.arguments += delta.function.arguments;
+    merged[index] = existing;
   }
-  return messages.map((message) => ({
-    role: ["system", "user", "assistant"].includes(message.role) ? message.role : "user",
-    content: String(message.content || "")
-  }));
+  return merged;
+}
+
+function normalizeCompletedToolCalls(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((call) => {
+    const id = typeof call?.id === "string" ? call.id.trim() : "";
+    const name = typeof call?.function?.name === "string" ? call.function.name.trim() : "";
+    if (!id || !name) return null;
+    return {
+      id,
+      type: "function",
+      function: {
+        name,
+        arguments: typeof call?.function?.arguments === "string" ? call.function.arguments : "{}"
+      }
+    };
+  }).filter(Boolean);
 }
 
 function normalizeReasoningEffort(value) {

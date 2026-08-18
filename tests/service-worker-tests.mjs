@@ -226,7 +226,7 @@ function sseResponse(text) {
   };
 }
 
-function connectStreamPort(requestId) {
+function connectStreamPort(requestId, payloadOverride = {}) {
   const portPosted = [];
   const streamPort = {
     name: "AI_CHAT_STREAM",
@@ -242,7 +242,8 @@ function connectStreamPort(requestId) {
     payload: {
       requestId,
       purpose: "direct",
-      messages: [{ role: "user", content: "empty content test" }]
+      messages: [{ role: "user", content: "empty content test" }],
+      ...payloadOverride
     }
   });
   return portPosted;
@@ -273,6 +274,39 @@ const emptyPosted = connectStreamPort("empty-content");
 await waitUntil(() => emptyPosted.some((message) => message.type === "ERROR"));
 const emptyError = emptyPosted.find((message) => message.type === "ERROR");
 assert.equal(emptyError.error, "模型没有返回有效内容，请重试");
+
+// Tool-only stream: fragmented tool-call fields are aggregated and returned
+// as a valid intermediate response, while the request body carries schemas.
+let toolStreamBody = null;
+globalThis.fetch = (_url, options) => {
+  toolStreamBody = JSON.parse(options.body);
+  return sseResponse([
+    'data: {"choices":[{"delta":{"reasoning_content":"查目录","tool_calls":[{"index":0,"id":"call_","type":"function","function":{"name":"search_gee_","arguments":"{\\"query\\":\\"Sent"}}]}}]}',
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"1","function":{"name":"datasets","arguments":"inel-2\\"}"}}]},"finish_reason":"tool_calls"}]}',
+    "data: [DONE]",
+    ""
+  ].join("\n\n"));
+};
+const toolOnlyPosted = connectStreamPort("tool-only-stream", {
+  tools: [{
+    type: "function",
+    function: {
+      name: "search_gee_datasets",
+      description: "Search official datasets",
+      parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] }
+    }
+  }]
+});
+await waitUntil(() => toolOnlyPosted.some((message) => message.type === "DONE"), 300);
+const toolDone = toolOnlyPosted.find((message) => message.type === "DONE");
+assert.equal(toolDone.content, "");
+assert.equal(toolDone.reasoningContent, "查目录");
+assert.equal(toolDone.toolCalls[0].id, "call_1");
+assert.equal(toolDone.toolCalls[0].function.name, "search_gee_datasets");
+assert.equal(toolDone.toolCalls[0].function.arguments, '{"query":"Sentinel-2"}');
+assert.equal(toolStreamBody.tools[0].function.name, "search_gee_datasets");
+assert.equal("tool_choice" in toolStreamBody, false);
+assert.equal("response_format" in toolStreamBody, false);
 
 // ---- Transport policy: billed chat requests time out and never auto-retry.
 // A non-V4 endpoint keeps the non-streaming chat() path reachable.
@@ -416,6 +450,27 @@ await waitUntil(() => stallPosted.some((message) => message.type === "ERROR"), 3
 assert.equal(stallFetches, 1, "no retry after content deltas were produced");
 assert.ok(stallPosted.some((message) => message.type === "CONTENT_DELTA" && message.delta === "partial"));
 assert.match(stallPosted.find((message) => message.type === "ERROR").error, /超时/);
+workerModule.__timings.streamIdleTimeoutMs = 60000;
+
+// A partial tool call is also observable model output. Retrying it could
+// duplicate a billed request and a tool action, so the worker must stop.
+workerModule.__timings.streamIdleTimeoutMs = 30;
+let stalledToolFetches = 0;
+globalThis.fetch = () => {
+  stalledToolFetches += 1;
+  return stalledSseResponse([
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"search_gee_docs","arguments":"{}"}}]}}]}\n\n'
+  ]);
+};
+const stalledToolPosted = connectStreamPort("stream-abort-after-tool", {
+  tools: [{
+    type: "function",
+    function: { name: "search_gee_docs", description: "Search docs", parameters: { type: "object" } }
+  }]
+});
+await waitUntil(() => stalledToolPosted.some((message) => message.type === "ERROR"), 300);
+assert.equal(stalledToolFetches, 1, "no retry after tool-call deltas were produced");
+assert.match(stalledToolPosted.find((message) => message.type === "ERROR").error, /超时/);
 workerModule.__timings.streamIdleTimeoutMs = 60000;
 
 // ---- First-byte timeout: silent stream retries once, then fails.

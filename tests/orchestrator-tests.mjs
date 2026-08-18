@@ -3,7 +3,15 @@ import { createOrchestrator } from "../lib/orchestrator.js";
 
 // Mock deps + chrome runtime for the orchestrator. The direct (non-streaming)
 // request path is exercised by keeping supportsThinking false.
-function createHarness({ settingsOverride = {}, editorState = null, streamAnswer = "流式回答", aiAnswer = "最终回答" } = {}) {
+function createHarness({
+  settingsOverride = {},
+  editorState = null,
+  streamAnswer = "流式回答",
+  streamResponses = null,
+  aiAnswer = "最终回答",
+  contextOptionsOverride = {},
+  toolSearchResponse = null
+} = {}) {
   const calls = {
     appended: [],
     statuses: [],
@@ -13,8 +21,10 @@ function createHarness({ settingsOverride = {}, editorState = null, streamAnswer
     composerModes: [],
     connects: [],
     portPosts: [],
-    portDisconnects: []
+    portDisconnects: [],
+    toolSearches: []
   };
+  const streamQueue = Array.isArray(streamResponses) ? [...streamResponses] : null;
   const settings = {
     hasApiKey: true,
     apiKey: "sk-test",
@@ -28,7 +38,10 @@ function createHarness({ settingsOverride = {}, editorState = null, streamAnswer
       lastError: null,
       async sendMessage(message) {
         if (message.type === "SETTINGS_GET") return { ok: true, settings };
-        if (message.type === "TOOLS_SEARCH") return { ok: true, context: "", sources: [], warnings: [] };
+        if (message.type === "TOOLS_SEARCH") {
+          calls.toolSearches.push(message.payload);
+          return toolSearchResponse || { ok: true, context: "", sources: [], warnings: [] };
+        }
         if (message.type === "AI_CHAT") {
           calls.aiChats.push(message.payload);
           return { ok: true, content: aiAnswer, finishReason: "stop", usage: { total_tokens: 7 } };
@@ -45,6 +58,7 @@ function createHarness({ settingsOverride = {}, editorState = null, streamAnswer
           postMessage(message) {
             calls.portPosts.push(message);
             if (message?.type === "START") {
+              const queuedResponse = streamQueue?.shift();
               queueMicrotask(() => {
                 for (const listener of messageListeners) {
                   listener({
@@ -52,7 +66,10 @@ function createHarness({ settingsOverride = {}, editorState = null, streamAnswer
                     requestId: message.payload?.requestId,
                     content: streamAnswer,
                     usage: { total_tokens: 9 },
-                    finishReason: "stop"
+                    finishReason: "stop",
+                    reasoningContent: "",
+                    toolCalls: [],
+                    ...(queuedResponse || {})
                   });
                 }
               });
@@ -87,7 +104,14 @@ function createHarness({ settingsOverride = {}, editorState = null, streamAnswer
     hideToolResults: () => {},
     createConsoleContextSection: () => "",
     createReasoningView: () => ({ append() {}, complete() {}, remove() {} }),
-    contextOptions: () => ({ includeSelection: true, includeCode: true, includeConsole: false }),
+    contextOptions: () => ({
+      includeSelection: true,
+      includeCode: true,
+      includeConsole: false,
+      datasetSearch: false,
+      docsSearch: false,
+      ...contextOptionsOverride
+    }),
     requiresEditorContext: () => false,
     isNearScrollEnd: () => true,
     isInitialized: () => true,
@@ -228,6 +252,79 @@ function lastAiChat(calls) {
   assert.equal(calls.aiChats.length, 1, "opt-in off keeps AI_CHAT");
   assert.equal(calls.connects.length, 0, "opt-in off never opens the stream Port");
   assert.ok(calls.statuses.some((status) => status.text.includes("兼容模式")));
+}
+
+// Official V4 full/loop passes may request bounded read-only tools. The
+// assistant reasoning/tool-call turn is replayed to the model in memory but
+// only the final answer enters the durable conversation window.
+{
+  const source = {
+    type: "dataset",
+    title: "Sentinel-2 SR Harmonized",
+    url: "https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_S2_SR_HARMONIZED"
+  };
+  const { calls, orchestrator } = createHarness({
+    settingsOverride: {
+      baseUrl: "https://api.deepseek.com/v1",
+      model: "deepseek-v4-flash",
+      supportsThinking: true
+    },
+    contextOptionsOverride: {
+      includeSelection: false,
+      includeCode: false,
+      datasetSearch: true,
+      docsSearch: false
+    },
+    toolSearchResponse: {
+      ok: true,
+      context: "COPERNICUS/S2_SR_HARMONIZED 官方目录快照",
+      sources: [source],
+      warnings: []
+    },
+    streamResponses: [
+      {
+        content: "",
+        reasoningContent: "需要核验目录",
+        toolCalls: [{
+          id: "call_1",
+          type: "function",
+          function: {
+            name: "search_gee_datasets",
+            arguments: '{"query":"Sentinel-2 SR harmonized coverage bands"}'
+          }
+        }],
+        finishReason: "tool_calls"
+      },
+      {
+        content: "已根据官方目录完成核验。",
+        reasoningContent: "核验完成",
+        toolCalls: [],
+        finishReason: "stop"
+      }
+    ]
+  });
+
+  await orchestrator.executePrompt("请核验 Sentinel-2 数据集和波段", false);
+
+  assert.equal(calls.portPosts.length, 2, "one tool turn must lead to one follow-up model request");
+  assert.deepEqual(
+    calls.portPosts[0].payload.tools.map((tool) => tool.function.name),
+    ["search_gee_datasets"]
+  );
+  const replayed = calls.portPosts[1].payload.messages;
+  const assistantToolTurn = replayed.find((message) => message.role === "assistant" && message.tool_calls);
+  assert.equal(assistantToolTurn.reasoning_content, "需要核验目录");
+  assert.equal(replayed.find((message) => message.role === "tool").tool_call_id, "call_1");
+  assert.equal(calls.toolSearches.length, 2, "initial retrieval plus model-targeted retrieval");
+  assert.deepEqual(orchestrator.getDirectConversation().at(-1), {
+    role: "assistant",
+    content: "已根据官方目录完成核验。"
+  });
+  assert.equal(
+    orchestrator.getDirectConversation().some((message) => "reasoning_content" in message),
+    false,
+    "reasoning_content must stay request-local"
+  );
 }
 
 // Queue drain: messages execute in FIFO order and the queue empties.

@@ -14,6 +14,16 @@ assert.deepEqual(events, [
   { type: "DONE", finishReason: "stop", usage: { total_tokens: 12 } }
 ]);
 
+const toolEvents = parseSseChunks([
+  'data: {"choices":[{"delta":{"reasoning_content":"需要检索","tool_calls":[{"index":0,"id":"call_","type":"function","function":{"name":"search_gee_","arguments":"{\\"query\\":\\"Sent"}}]}}]}\n\n',
+  'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"1","function":{"name":"datasets","arguments":"inel-2\\"}"}}]},"finish_reason":"tool_calls"}]}\n\n',
+  "data: [DONE]\n\n"
+]);
+assert.equal(toolEvents[0].type, "REASONING_DELTA");
+assert.equal(toolEvents[1].type, "TOOL_CALL_DELTA");
+assert.equal(toolEvents[2].toolCalls[0].function.name, "datasets");
+assert.equal(toolEvents.at(-1).finishReason, "tool_calls");
+
 const multiLine = parseSseChunks([
   "event: message\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\r\ndata: \r\n\r\n",
   "data: [DONE]\r\n\r\n"
