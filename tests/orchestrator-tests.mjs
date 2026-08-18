@@ -133,6 +133,49 @@ function lastAiChat(calls) {
   return calls.aiChats.at(-1);
 }
 
+function createTodoPlanAnswer(taskCount) {
+  const todoList = Array.from({ length: taskCount }, (_, index) => ({
+    id: `todo_${index + 1}`,
+    title: `任务 ${index + 1}`,
+    objective: `完成第 ${index + 1} 项可验证规划任务`,
+    evidenceNeeded: [index === 0 ? "用户需求" : "前序结果与官方资料"],
+    status: index === 0 ? "in_progress" : "pending",
+    result: ""
+  }));
+  return JSON.stringify({
+    status: "needs_clarification",
+    phase: "clarifying",
+    todoList,
+    completedThisTurn: [],
+    currentTodoId: "todo_1",
+    nextTodoId: taskCount > 1 ? "todo_2" : "",
+    goal: "计算广州市 NDVI",
+    researchSummary: "等待确认统计口径。",
+    datasets: [],
+    requirements: {
+      area: "广州市",
+      timeRange: "",
+      temporalAggregation: "",
+      spatialStatistic: "",
+      qualityControl: ""
+    },
+    method: [],
+    outputs: [],
+    assumptions: [],
+    risks: [],
+    revisionSummary: [],
+    questions: [{
+      id: "time_range",
+      prompt: "请选择分析时间范围。",
+      options: [
+        { id: "recent", label: "近五年", description: "分析最近五个完整年份", recommended: true },
+        { id: "custom", label: "自定义", description: "由用户提供起止年份", recommended: false }
+      ],
+      allowFreeText: true
+    }]
+  });
+}
+
 // runDirectTurn assembles system + conversation window + user content.
 {
   const editorState = { code: "var a = 1;", selection: "", consoleRead: { status: "empty" } };
@@ -467,6 +510,63 @@ function lastAiChat(calls) {
   assert.equal(orchestrator.getActivePlan().state, "clarifying");
   assert.equal(orchestrator.getActivePlan().plan.questions[0].prompt, "时间聚合采用哪种方式？");
   assert.ok(calls.statuses.some((status) => status.text.startsWith("等待需求澄清")));
+}
+
+// An official V4 plan with too few TODOs receives exactly one no-tools JSON
+// structure repair. A valid repair is applied and both requests count toward
+// the displayed usage.
+{
+  const { calls, orchestrator } = createHarness({
+    settingsOverride: {
+      baseUrl: "https://api.deepseek.com/v1",
+      model: "deepseek-v4-flash",
+      supportsThinking: true
+    },
+    streamResponses: [
+      { content: createTodoPlanAnswer(2) },
+      { content: createTodoPlanAnswer(4) }
+    ]
+  });
+  await orchestrator.executePrompt("计算广州市 NDVI", true);
+
+  assert.deepEqual(
+    calls.portPosts.map((entry) => entry.payload.purpose),
+    ["plan_research", "plan_research_structure_repair"]
+  );
+  assert.deepEqual(calls.portPosts[1].payload.tools, [], "structure repair must not expose tools");
+  assert.match(calls.portPosts[1].payload.messages.at(-1).content, /唯一一次自动结构修复/);
+  assert.equal(orchestrator.getActivePlan().plan.todoList.length, 4);
+  assert.equal(orchestrator.getActivePlan().state, "clarifying");
+  assert.equal(calls.appended.filter((entry) => entry.role === "error").length, 0);
+  assert.ok(calls.appended.some((entry) => entry.purpose === "plan_action" && /已完成一次受限结构修复/.test(entry.text)));
+  assert.ok(calls.statuses.some((status) => status.text.includes("等待需求澄清 · 18 tokens")));
+}
+
+// If the single model repair is still invalid, planning continues with the
+// deterministic four-task local skeleton instead of surfacing a fatal error.
+{
+  const { calls, orchestrator } = createHarness({
+    settingsOverride: {
+      baseUrl: "https://api.deepseek.com/v1",
+      model: "deepseek-v4-flash",
+      supportsThinking: true
+    },
+    streamResponses: [
+      { content: createTodoPlanAnswer(2) },
+      { content: createTodoPlanAnswer(3) }
+    ]
+  });
+  await orchestrator.executePrompt("计算广州市 NDVI", true);
+
+  assert.equal(calls.portPosts.length, 2, "the structure repair must never recurse");
+  const recovered = orchestrator.getActivePlan();
+  assert.equal(recovered.plan.todoList.length, 4);
+  assert.equal(recovered.plan.todoList[0].title, "确认分析目标与边界");
+  assert.equal(recovered.plan.datasets.length, 0);
+  assert.equal(recovered.state, "clarifying");
+  assert.equal(calls.appended.filter((entry) => entry.role === "error").length, 0);
+  assert.ok(calls.appended.some((entry) => entry.purpose === "plan_action" && /本地安全的 4 项 TODO 骨架/.test(entry.text)));
+  assert.ok(calls.statuses.some((status) => status.text.includes("等待需求澄清 · 18 tokens")));
 }
 
 // ISS-008: a plan response that is only fenced code must not crash, must not

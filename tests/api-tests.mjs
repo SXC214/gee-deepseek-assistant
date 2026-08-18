@@ -70,6 +70,18 @@ assert.equal(official.stream, true);
 assert.deepEqual(official.stream_options, { include_usage: true });
 assert.deepEqual(official.response_format, { type: "json_object" });
 
+const structureRepair = buildChatRequestBody({
+  model: "deepseek-v4-flash",
+  messages,
+  settings: { baseUrl: "https://api.deepseek.com", thinkingEnabled: true },
+  purpose: "plan_research_structure_repair"
+});
+assert.deepEqual(
+  structureRepair.response_format,
+  { type: "json_object" },
+  "the no-tools structure repair must retain strict JSON mode"
+);
+
 const toolMessages = normalizeChatMessages([
   { role: "user", content: "核验数据集" },
   {

@@ -4,6 +4,7 @@ import {
   applyPlanResponse,
   containsFencedCodeBlock,
   createPlanSession,
+  createSafeTodoFallbackPlan,
   mergeSources,
   parsePlanResponse,
   restorePlanSession,
@@ -229,6 +230,13 @@ let todoSession = createPlanSession("计算 2000-2020 年广州市 NDVI 均值�
 todoSession = { ...todoSession, sources: merged };
 assert.equal(todoSession.workflow, "todo_v1");
 assert.equal(validatePlanResponse(todoClarifying, merged, { requireTodoWorkflow: true }).valid, true);
+const safeTodoFallback = createSafeTodoFallbackPlan("计算广州市 NDVI");
+const safeTodoValidation = validatePlanResponse(safeTodoFallback, [], { requireTodoWorkflow: true });
+assert.equal(safeTodoValidation.valid, true, safeTodoValidation.errors.join("\n"));
+assert.equal(safeTodoFallback.todoList.length, 4);
+assert.equal(safeTodoFallback.status, "needs_clarification");
+assert.equal(safeTodoFallback.datasets.length, 0, "local fallback must not retain unverified dataset claims");
+assert.equal(safeTodoFallback.questions[0].options.length, 2);
 todoSession = applyPlanResponse(todoSession, todoClarifying);
 assert.equal(todoSession.plan.todoList.length, 4);
 assert.equal(todoSession.plan.currentTodoId, "todo_3");
