@@ -375,6 +375,14 @@ details.activity-card[open] > summary::before { transform: rotate(90deg); }
 .candidate-message { border-color: #a9c4ee; background: #fbfdff; }
 .candidate-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .badge-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+.candidate-validation { margin: 0 0 9px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+.candidate-validation > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 9px; cursor: pointer; font-size: 10px; font-weight: 600; }
+.candidate-validation-checks { display: grid; gap: 4px; margin: 0; padding: 0 9px 8px 25px; font-size: 10px; line-height: 1.4; }
+.candidate-validation-checks li.validation-passed { color: var(--green); }
+.candidate-validation-checks li.validation-warning { color: #8a4b00; }
+.candidate-validation-checks li.validation-failed { color: var(--red); }
+.candidate-validation-failed { border-color: #e7aaa5; background: var(--red-soft); }
+.candidate-validation-warning { border-color: #e4c77b; background: #fff9e8; }
 
 .plan-content { display: grid; gap: 10px; line-height: 1.5; }
 .plan-content h3 { margin: 4px 0 0; font-size: 13px; }
@@ -499,6 +507,7 @@ details.activity-card[open] > summary::before { transform: rotate(90deg); }
 .badge { display: inline-flex; min-height: 21px; align-items: center; padding: 2px 7px; border-radius: 999px; background: var(--green-soft); color: var(--green); font-size: 10px; }
 .badge.muted { background: #eef0f3; color: var(--muted); }
 .badge.processing { background: var(--amber-soft); color: var(--amber); }
+.badge.error { background: var(--red-soft); color: var(--red); }
 .hint { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.4; }
 .hidden { display: none !important; }
 

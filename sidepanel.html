@@ -111,6 +111,7 @@
           </div>
           <div class="editor-actions">
             <button id="runButton" class="compact-button" type="button">运行</button>
+            <button id="consoleRepairButton" class="compact-button hidden" type="button">根据 Console 修复</button>
             <button id="geeRestButton" class="compact-button" type="button" aria-controls="geeRestPanel" aria-expanded="false">资产/任务</button>
             <button id="readButton" class="compact-button" type="button">读取</button>
           </div>
@@ -204,6 +205,13 @@
                   <span id="candidateStatusBadge" class="badge muted">待应用</span>
                 </div>
               </div>
+              <details id="candidateValidation" class="candidate-validation hidden" open>
+                <summary>
+                  <span id="candidateValidationSummary">代码预检</span>
+                  <span id="candidateValidationBadge" class="badge muted">未检查</span>
+                </summary>
+                <ul id="candidateValidationChecks" class="candidate-validation-checks"></ul>
+              </details>
               <pre id="diffView" class="diff-view"></pre>
               <details class="candidate-code-details">
                 <summary>查看完整代码</summary>

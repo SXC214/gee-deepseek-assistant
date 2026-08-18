@@ -4,7 +4,13 @@ import {
   markCodeCandidateApplied
 } from "./lib/candidate.js";
 import { appendChatEntry, createChatEntry, sanitizeChatHistory, sanitizeChatText } from "./lib/chat.js";
-import { createConsoleContextSection, getConsoleUiState, normalizeConsoleRead } from "./lib/console.js";
+import {
+  createConsoleContextSection,
+  createConsoleDiagnostic,
+  getConsoleUiState,
+  isNewConsoleDiagnostic,
+  normalizeConsoleRead
+} from "./lib/console.js";
 import { alignConversationToUser } from "./lib/conversation.js";
 import { createLineDiff } from "./lib/diff.js";
 import { createOrchestrator } from "./lib/orchestrator.js";
@@ -73,6 +79,7 @@ let initializing = false;
 let initRetryButton = null;
 let followConversation = true;
 let consoleReadAttempted = false;
+let lastConsoleDiagnostic = null;
 // Workspace auto-read connection: the toggle persists under
 // workspaceAutoReadV1, and tab switches / completed navigations on the Code
 // Editor trigger one debounced read per tab while connected.
@@ -221,6 +228,7 @@ function bindEvents() {
   elements.workspaceConnectButton.addEventListener("click", connectWorkspace);
   registerWorkspaceTabListeners();
   elements.runButton.addEventListener("click", runScript);
+  elements.consoleRepairButton.addEventListener("click", requestConsoleRepair);
   elements.geeRestButton.addEventListener("click", () => toggleGeeRestPanel());
   elements.geeRestCloseButton.addEventListener("click", () => toggleGeeRestPanel(false));
   elements.geeRestRefreshButton.addEventListener("click", () => refreshGeeRest().catch(showError));
@@ -923,6 +931,8 @@ async function startNewConversation() {
   orchestrator.resetForNewConversation();
   candidate = null;
   resetPlanOptionSelections();
+  lastConsoleDiagnostic = null;
+  elements.consoleRepairButton.classList.add("hidden");
   elements.conversation.replaceChildren(
     elements.conversationEmpty,
     elements.toolResults,
@@ -1822,13 +1832,14 @@ function renderPlanRequirements(requirements) {
   elements.planContent.append(list);
 }
 
-function showCandidate(code, baseState = editorState, planRevision = null) {
+function showCandidate(code, baseState = editorState, planRevision = null, validation = null) {
   candidate = createCodeCandidate({
     code,
     baseCode: baseState?.code || "",
     baseRevision: baseState?.revision || "",
     tabId: baseState?.tabId || null,
     planRevision,
+    validation,
     status: "ready",
     createdAt: Date.now()
   });
@@ -1843,6 +1854,8 @@ function renderCandidateCard({ scroll = false } = {}) {
   }
   const editorBound = Boolean(candidate.tabId && candidate.baseRevision);
   const applied = candidate.status === "applied";
+  const validationStatus = candidate.validation?.status || "";
+  const validationFailed = validationStatus === "failed";
   const follow = isNearScrollEnd(elements.conversation, 64);
   const diff = createLineDiff(candidate.baseCode, candidate.code);
   elements.candidateTitle.textContent = applied
@@ -1855,20 +1868,34 @@ function renderCandidateCard({ scroll = false } = {}) {
     : `${candidate.code.split("\n").length} 行`;
   elements.diffView.replaceChildren(...renderDiff(diff.entries));
   elements.candidateCodeView.textContent = candidate.code;
-  elements.candidateStatusBadge.textContent = applied ? "已应用" : "待应用";
-  elements.candidateStatusBadge.classList.toggle("muted", !applied);
+  elements.candidateStatusBadge.textContent = applied
+    ? "已应用"
+    : validationFailed ? "预检阻断" : validationStatus === "warning" ? "待核验" : validationStatus === "passed" ? "预检通过" : "待应用";
+  elements.candidateStatusBadge.classList.toggle("muted", !applied && !validationFailed && validationStatus !== "passed");
+  elements.candidateStatusBadge.classList.toggle("processing", validationStatus === "warning");
+  elements.candidateStatusBadge.classList.toggle("error", validationFailed);
   elements.candidatePanel.classList.toggle("candidate-applied", applied);
   elements.candidatePanel.classList.toggle("activity-success", applied);
+  elements.candidatePanel.classList.toggle("activity-error", validationFailed && !applied);
   elements.applyButton.classList.toggle("hidden", !editorBound || applied);
   elements.insertButton.classList.toggle("hidden", !editorBound || candidate.planRevision != null || applied);
+  elements.applyButton.disabled = validationFailed;
+  elements.insertButton.disabled = validationFailed;
   elements.copyButton.classList.toggle("primary", !editorBound || applied);
+  renderCandidateValidation(candidate.validation);
   if (applied) {
     const action = candidate.applicationMode === "insert" ? "插入到光标" : "替换完整脚本";
     elements.candidateHint.textContent = `代码已通过“${action}”写入编辑器；此卡片会保留，关闭前仍可查看或复制。`;
+  } else if (validationFailed) {
+    elements.candidateHint.textContent = "本地预检仍有阻断项，已禁用一键写入；可展开检查结果并复制代码人工审阅。预检不等同于 GEE 服务端运行。";
   } else {
-    elements.candidateHint.textContent = editorBound
+    const validationHint = validationStatus === "warning"
+      ? "本地预检有待核验项；应用后仍需查看真实 GEE Console。"
+      : validationStatus === "passed" ? "本地预检已通过；仍需在真实 GEE Console 中验证运行结果。" : "";
+    const applyHint = editorBound
       ? "写入前会检查脚本是否被修改；可在 Ace 编辑器中使用 Ctrl+Z 撤销。"
       : "当前脚本未绑定 GEE 标签页。请复制代码并粘贴到 Earth Engine Code Editor；扩展不会自动运行。";
+    elements.candidateHint.textContent = [validationHint, applyHint].filter(Boolean).join(" ");
   }
   placeCandidateCard();
   elements.candidatePanel.classList.remove("hidden");
@@ -1879,6 +1906,27 @@ function renderCandidateCard({ scroll = false } = {}) {
     });
   } else if (scroll) {
     updateScrollFollower();
+  }
+}
+
+function renderCandidateValidation(validation) {
+  elements.candidateValidation.classList.toggle("hidden", !validation);
+  elements.candidateValidation.classList.toggle("candidate-validation-failed", validation?.status === "failed");
+  elements.candidateValidation.classList.toggle("candidate-validation-warning", validation?.status === "warning");
+  elements.candidateValidationChecks.replaceChildren();
+  if (!validation) return;
+  elements.candidateValidationSummary.textContent = validation.summary;
+  elements.candidateValidationBadge.textContent = validation.status === "failed"
+    ? "阻断"
+    : validation.status === "warning" ? "需核验" : "通过";
+  elements.candidateValidationBadge.classList.toggle("muted", validation.status === "warning");
+  elements.candidateValidationBadge.classList.toggle("processing", validation.status === "warning");
+  elements.candidateValidationBadge.classList.toggle("error", validation.status === "failed");
+  for (const item of validation.checks || []) {
+    const entry = document.createElement("li");
+    entry.className = `validation-${item.status}`;
+    entry.textContent = `${item.label}：${item.detail}`;
+    elements.candidateValidationChecks.append(entry);
   }
 }
 
@@ -1942,6 +1990,9 @@ async function applyCandidate(mode) {
   if (candidate.planRevision != null && mode !== "replace_all") {
     return showError("计划模式生成的是完整脚本，只能替换完整脚本");
   }
+  if (candidate.validation?.status === "failed") {
+    return showError("候选代码未通过本地预检，已阻止写入；请先修复阻断项");
+  }
   setStatus("正在写入编辑器…");
   try {
     const { response } = await sendToEditor({
@@ -1986,20 +2037,76 @@ async function dismissCandidate() {
   candidate = null;
   elements.candidatePanel.classList.add("hidden");
   elements.candidatePanel.classList.remove("candidate-applied");
+  elements.candidatePanel.classList.remove("activity-error");
   elements.applyButton.classList.remove("hidden");
   elements.insertButton.classList.remove("hidden");
   elements.copyButton.classList.remove("primary");
   elements.diffView.textContent = "";
   elements.candidateCodeView.textContent = "";
+  elements.candidateValidation.classList.add("hidden");
+  elements.candidateValidationChecks.replaceChildren();
   await chrome.storage.local.remove(CODE_CANDIDATE_KEY);
   syncConversationEmptyState();
 }
 
 async function runScript() {
   if (!confirm("确定要运行当前 Earth Engine 脚本吗？运行可能创建导出任务或产生计算用量。")) return;
+  const before = createConsoleDiagnostic(editorState?.consoleText, editorState?.consoleRead);
+  lastConsoleDiagnostic = null;
+  elements.consoleRepairButton.classList.add("hidden");
   const result = await sendToEditor({ type: "EDITOR_RUN" }).catch((error) => ({ response: { ok: false, error: safeError(error) } }));
   if (!result.response?.ok) return showError(result.response?.error || "运行失败");
-  setStatus("已点击 Run；请在 Earth Engine 中查看结果");
+  setStatus("已点击 Run；正在监测真实 Earth Engine Console…");
+  const observed = await pollConsoleAfterRun(before);
+  if (!observed) {
+    setStatus("监测期内未发现 Console 错误；异步图层或导出结果仍请在 GEE 中确认");
+    return;
+  }
+  lastConsoleDiagnostic = observed.diagnostic;
+  elements.consoleRepairButton.classList.remove("hidden");
+  await orchestrator.recordObservedFailure(
+    `${observed.diagnostic.signature} ${observed.diagnostic.excerpt.slice(-2000)}`,
+    "gee_console"
+  ).catch(() => undefined);
+  appendMessage(
+    "assistant",
+    `${observed.repeated ? "运行后仍检测到" : "运行后检测到"}真实 GEE Console 错误（${observed.diagnostic.signature}）。可点击“根据 Console 修复”发起一次携带当前完整脚本和错误证据的新请求。\n\n${observed.diagnostic.excerpt.slice(-1600)}`,
+    { purpose: "console" }
+  );
+  setStatus("检测到 GEE Console 错误；等待你确认是否请求修复", "error");
+}
+
+async function pollConsoleAfterRun(before) {
+  let repeated = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 1600));
+    const state = await readEditor({ quiet: true });
+    const diagnostic = createConsoleDiagnostic(state?.consoleText, state?.consoleRead);
+    if (!diagnostic) continue;
+    if (isNewConsoleDiagnostic(before, diagnostic)) return { diagnostic, repeated: false };
+    repeated = diagnostic;
+  }
+  return repeated ? { diagnostic: repeated, repeated: true } : null;
+}
+
+function requestConsoleRepair() {
+  if (!lastConsoleDiagnostic) return showError("当前没有已捕获的 GEE Console 错误");
+  if (busy) return showError("当前任务仍在运行，请先停止后再请求 Console 修复");
+  const diagnostic = lastConsoleDiagnostic;
+  lastConsoleDiagnostic = null;
+  elements.consoleRepairButton.classList.add("hidden");
+  selectComposerMode(false, { quiet: true });
+  elements.includeCode.checked = true;
+  elements.includeConsole.checked = true;
+  renderConsoleReadStatus();
+  elements.prompt.value = [
+    "请根据下面真实捕获的 Earth Engine Console 错误，诊断并修复当前完整脚本。保留无关代码、资产变量和几何导入；返回一个完整 GEE JavaScript 脚本。",
+    `错误签名：${diagnostic.signature}`,
+    "不得在没有新增诊断或修改的情况下原样重复上一候选。",
+    "真实 Console：",
+    diagnostic.excerpt
+  ].join("\n\n");
+  elements.promptForm.requestSubmit();
 }
 
 function stopRequest() {

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import {
   createConsoleContextSection,
+  createConsoleDiagnostic,
   getConsoleUiState,
+  isNewConsoleDiagnostic,
   normalizeConsoleRead
 } from "../lib/console.js";
 
@@ -52,5 +54,16 @@ const unavailableView = getConsoleUiState(true, { status: "unavailable", reason:
 assert.equal(unavailableView.label, "Console · 未读取");
 assert.match(unavailableView.title, /读取失败/);
 assert.equal(getConsoleUiState(true, null, false).label, "Console");
+
+const diagnostic = createConsoleDiagnostic(screenshotError, {
+  status: "captured",
+  source: "semantic_fallback"
+});
+assert.match(diagnostic.signature, /^gee-console:[0-9a-f]{8}$/);
+assert.equal(diagnostic.excerpt, screenshotError);
+assert.equal(createConsoleDiagnostic("Number: 42", { status: "captured" }), null);
+assert.equal(isNewConsoleDiagnostic(null, diagnostic), true);
+assert.equal(isNewConsoleDiagnostic(diagnostic, { ...diagnostic, capturedAt: Date.now() + 1 }), false);
+assert.equal(isNewConsoleDiagnostic(diagnostic, { ...diagnostic, signature: "gee-console:different" }), true);
 
 console.log("Console context tests passed.");

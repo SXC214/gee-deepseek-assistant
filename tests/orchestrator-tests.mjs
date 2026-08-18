@@ -9,6 +9,7 @@ function createHarness({
   streamAnswer = "流式回答",
   streamResponses = null,
   aiAnswer = "最终回答",
+  aiAnswers = null,
   contextOptionsOverride = {},
   toolSearchResponse = null
 } = {}) {
@@ -25,6 +26,7 @@ function createHarness({
     toolSearches: []
   };
   const streamQueue = Array.isArray(streamResponses) ? [...streamResponses] : null;
+  const aiQueue = Array.isArray(aiAnswers) ? [...aiAnswers] : null;
   const settings = {
     hasApiKey: true,
     apiKey: "sk-test",
@@ -44,7 +46,12 @@ function createHarness({
         }
         if (message.type === "AI_CHAT") {
           calls.aiChats.push(message.payload);
-          return { ok: true, content: aiAnswer, finishReason: "stop", usage: { total_tokens: 7 } };
+          return {
+            ok: true,
+            content: aiQueue?.shift() ?? aiAnswer,
+            finishReason: "stop",
+            usage: { total_tokens: 7 }
+          };
         }
         return { ok: true };
       },
@@ -83,7 +90,9 @@ function createHarness({
       }
     },
     appendMessage: (role, text, options) => { calls.appended.push({ role, text, ...options }); },
-    showCandidate: (code, state, planRevision) => { calls.candidates.push({ code, state, planRevision }); },
+    showCandidate: (code, state, planRevision, validation) => {
+      calls.candidates.push({ code, state, planRevision, validation });
+    },
     setBusy: (value) => { calls.busy.push(value); },
     setStatus: (text, state = "") => { calls.statuses.push({ text, state }); },
     showError: (error) => { calls.statuses.push({ text: String(error && error.message || error) }); },
@@ -161,6 +170,29 @@ function lastAiChat(calls) {
   ]);
   assert.deepEqual(calls.busy, [true, false]);
   assert.ok(calls.statuses.some((status) => status.text.includes("完成 · 7 tokens")));
+  await orchestrator.recordObservedFailure("gee-console:deadbeef Layer error", "gee_console");
+  assert.match(orchestrator.getReasoningSession().failures.at(-1).signature, /gee_console:gee-console:deadbeef/);
+}
+
+// A blocking deterministic preflight triggers exactly one diagnostic repair.
+// The repaired candidate is the only version shown and the usage is summed.
+{
+  const { calls, orchestrator } = createHarness({
+    aiAnswers: [
+      "初稿：\n```javascript\nvar node = document.querySelector('body');\nMap.addLayer(node);\n```",
+      "已修复：\n```javascript\nvar image = ee.Image('projects/demo/assets/image');\nMap.addLayer(image, {}, 'image');\n```"
+    ]
+  });
+  await orchestrator.executePrompt("生成一段 GEE 代码", false);
+
+  assert.equal(calls.aiChats.length, 2, "a failed preflight gets only one automatic repair request");
+  assert.equal(calls.aiChats[1].purpose, "direct_repair");
+  assert.match(calls.aiChats[1].messages.at(-1).content, /唯一一次自动修复/);
+  assert.equal(calls.candidates.length, 1);
+  assert.match(calls.candidates[0].code, /projects\/demo\/assets\/image/);
+  assert.equal(calls.candidates[0].validation.status, "passed");
+  assert.equal(calls.appended.find((entry) => entry.role === "assistant").text, "已修复：\n[代码见下方修改预览]");
+  assert.ok(calls.statuses.some((status) => status.text.includes("完成 · 14 tokens")));
 }
 
 // Conversation window keeps at most 6 prior messages and stays user-aligned.
