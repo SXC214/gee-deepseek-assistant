@@ -1,6 +1,8 @@
 {
   "name": "gee-deepseek-assistant",
   "version": "0.4.0",
+  "description": "AI coding assistant side panel for Google Earth Engine Code Editor",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "scripts": {

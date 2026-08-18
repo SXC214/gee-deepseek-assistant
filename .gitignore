@@ -16,3 +16,6 @@ CODE.txt
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local usage screenshots
+docs/usage-images/
