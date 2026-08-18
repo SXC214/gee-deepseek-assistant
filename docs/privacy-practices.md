@@ -26,7 +26,7 @@ Provides the extension's user interface as a Chrome side panel and opens that pa
 
 ### storage
 
-Stores extension settings, tool preferences, conversation history, plans, generated-code review cards, documentation caches, and optional local Shapefile fallback data in the user's browser. API keys are session-only by default and are stored locally only when the user explicitly enables persistent storage. The extension does not use storage for advertising or tracking.
+Stores extension settings, tool preferences, conversation history, plans, a reasoning-control ledger without detailed chain-of-thought, generated-code review/local-preflight cards, documentation caches, and optional local Shapefile fallback data in the user's browser. API keys are session-only by default and are stored locally only when the user explicitly enables persistent storage. The extension does not use storage for advertising or tracking.
 
 ### tabs
 
@@ -34,7 +34,7 @@ Identifies the active Google Earth Engine Code Editor tab, verifies that the use
 
 ### unlimitedStorage
 
-Prevents loss of user-created conversation history, plans, code-review snapshots, documentation caches, and optional local Shapefile fallback data when they exceed Chrome's normal local-storage quota. The data remains in the user's own browser and is not used for tracking.
+Prevents loss of user-created conversation history, plans, reasoning-control state, code-review/preflight snapshots, documentation caches, and optional local Shapefile fallback data when they exceed Chrome's normal local-storage quota. The data remains in the user's own browser and is not used for tracking.
 
 ## Remote code
 

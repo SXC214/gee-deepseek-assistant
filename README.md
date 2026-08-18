@@ -26,6 +26,10 @@ This is a Chrome / Edge Manifest V3 extension that adds a dedicated AI side pane
 - Docs Search：检索 Google Earth Engine 官方指南、API 参考、REST 参考和教程。
 - 检索结果会显示为可点击来源，并作为有边界的参考上下文传给模型。
 - DeepSeek V4 Flash / Pro 支持实时展示思考过程，并可选择 High 或 Max 思考强度；最终回答开始后自动折叠思考内容。
+- 为复杂任务加入 `fast / full / loop` 推理门控与 `Goal / Core / Verified / Open / Next` 可审计账本；只持久化任务状态，不保存详细思维链。
+- 官方 DeepSeek V4 的 `full / loop` 回合可按需调用严格白名单的只读工具，定向检索官方数据目录/文档或重新读取用户已启用的编辑器、Console 上下文；模型没有写入、运行或删除工具权限。
+- 生成代码先经过确定性本地预检，检查 JavaScript 结构、Code Editor 运行面、常见密钥模式、数据集官方来源和确认计划一致性；阻断项最多触发一次诊断式修复，仍失败时禁止一键写入。
+- 用户确认运行后会短时监测真实 GEE Console；检测到错误时只显示“根据 Console 修复”入口，必须再次由用户点击才会发起模型请求。
 - 计划模式会先检索官方资料、比较数据集、澄清分析口径，经用户确认后才生成代码；官方 DeepSeek V4 Flash 会先建立 4-8 项可验证 TODO，再按顺序逐项调研。
 - 模型与项目设置默认隐藏，通过侧栏左上角的齿轮按钮打开。
 - 独立的对话记录窗口按时间顺序显示用户输入、助手回复、官方来源快照、错误、思考状态和计划操作；每个计划 revision 会保留只读文字快照，可清空并在重新打开侧栏后恢复。
@@ -50,6 +54,10 @@ This is a Chrome / Edge Manifest V3 extension that adds a dedicated AI side pane
 - Docs Search: searches the official Google Earth Engine guides, API reference, REST reference, and tutorials.
 - Search results are shown as clickable sources and passed to the model as bounded reference context.
 - DeepSeek V4 Flash / Pro support real-time reasoning display with High or Max thinking effort; reasoning collapses automatically once the final answer starts.
+- Complex tasks use a `fast / full / loop` reasoning gate and an auditable `Goal / Core / Verified / Open / Next` ledger; only task state is persisted, never detailed chain-of-thought.
+- On official DeepSeek V4, `full / loop` turns may invoke a strict allowlist of read-only tools to search official datasets/docs or re-read editor/Console context already enabled by the user; the model receives no write, run, or delete tools.
+- Generated code passes a deterministic local preflight for JavaScript structure, Code Editor runtime surface, common secret patterns, official dataset evidence, and confirmed-plan alignment. Blocking findings get at most one diagnostic repair; unresolved candidates cannot be written with one click.
+- After the user confirms Run, the extension briefly monitors the real GEE Console. If an error appears, it exposes a "Repair from Console" action; another explicit user click is required before any model request is made.
 - Plan mode first researches official sources, compares datasets, and clarifies the analysis scope, and only generates code after user confirmation; with official DeepSeek V4 Flash it first builds a 4–8 item verifiable TODO list, then researches each item in order.
 - Model and project settings are hidden by default and open via the gear button at the top-left of the side panel.
 - A dedicated conversation window shows user inputs, assistant replies, official source snapshots, errors, thinking status, and plan actions in chronological order; every plan revision keeps a read-only text snapshot, which can be cleared and is restored after reopening the side panel.
@@ -100,14 +108,14 @@ The "Model provider" dropdown at the top of the settings panel ships with the Op
 3. 根据需要启用 Dataset Search、Docs Search；两者可以同时使用。
 4. 检查官方资料来源、模型解释和差异预览。
 5. 点击“替换完整脚本”或“插入到光标”。
-6. 如需执行，点击“运行脚本”并再次确认。
+6. 如需执行，点击“运行脚本”并再次确认；若监测到真实 Console 错误，可再点击“根据 Console 修复”。
 
 1. Click "Read code" and confirm the status shows "Connected".
 2. Enter a task, e.g. "fix the Console errors and return the full script".
 3. Enable Dataset Search and/or Docs Search as needed; both can be used together.
 4. Review the official sources, the model's explanation, and the diff preview.
 5. Click "Replace full script" or "Insert at cursor".
-6. To execute, click "Run script" and confirm again.
+6. To execute, click "Run script" and confirm again. If a real Console error is detected, click "Repair from Console" to explicitly request a diagnostic fix.
 
 生成代码后，如果你仍停留在对话底部，界面会定位到代码卡；如果正在阅读较早内容，则只显示“回到最新”而不会抢走滚动位置。代码卡同时提供差异预览和可展开的完整代码；即使模型没有正确使用 Markdown 代码围栏，扩展也会尝试从说明文字后识别 GEE JavaScript。应用代码后卡片会保留并显示“已应用”，方便复查或再次复制。
 
@@ -121,7 +129,11 @@ On first use of the search tools, the extension builds a lightweight index from 
 
 在齿轮设置中可以开启或关闭思考，并选择 `High` 或 `Max`。思考内容仅在当前请求期间显示，最终回答开始后自动折叠；它不会保存到对话历史或浏览器存储。关闭思考时仍使用流式最终回答，但不显示思考区域。
 
+复杂任务会另外保存一个不含思维链的控制账本，记录目标、稳定约束、已验证检查点及其覆盖范围、待解决问题、下一动作和失败签名。该账本显示在对话中的“推理控制”卡，可在重开侧栏后恢复；开始新对话会清除它。
+
 Thinking can be toggled in the gear settings, with `High` or `Max` effort. Reasoning is displayed only during the current request and collapses automatically once the final answer starts; it is never saved to conversation history or browser storage. With thinking off, the final answer still streams, but no reasoning area is shown.
+
+Complex tasks separately persist a control ledger without chain-of-thought: goal, stable constraints, verified checkpoints with coverage, open questions, next action, and failure signatures. It appears in the conversation as the "Reasoning control" card, survives reopening the side panel, and is cleared by starting a new conversation.
 
 ### 计划模式 / Plan Mode
 

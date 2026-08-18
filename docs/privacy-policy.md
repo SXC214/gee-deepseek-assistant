@@ -1,6 +1,6 @@
 # GEE AI Code Assistant — Privacy Policy
 
-_Last updated: 2026-08-18_
+_Last updated: 2026-08-19_
 
 ## 数据处理概览 / Data processing overview
 
@@ -20,9 +20,9 @@ GEE source code returned by the model is first displayed as text for your review
 
 ## 本地存储 / Local storage
 
-设置、对话记录、计划历史、代码卡快照、文档缓存以及可选的本地 Shapefile 条目保存在你本机的浏览器存储（`chrome.storage`）中。API Key 默认仅保存在浏览器会话中；如你选择持久保存，也仅存于本机。Google Earth Engine OAuth 访问令牌仅保存在当前浏览器会话中。你可通过扩展内的清除功能、移除扩展或清除浏览器扩展数据来删除这些数据。
+设置、对话记录、计划历史、不含详细思维链的推理控制账本、代码卡及其本地预检快照、文档缓存以及可选的本地 Shapefile 条目保存在你本机的浏览器存储（`chrome.storage`）中。控制账本只记录目标、约束、验证覆盖、待解决项、下一动作和失败签名；实时 `reasoning_content` 不会保存。API Key 默认仅保存在浏览器会话中；如你选择持久保存，也仅存于本机。Google Earth Engine OAuth 访问令牌仅保存在当前浏览器会话中。你可通过扩展内的清除功能、移除扩展或清除浏览器扩展数据来删除这些数据。
 
-Settings, conversation history, plan history, code-card snapshots, documentation caches, and optional local Shapefile entries are stored in your browser's `chrome.storage`. API keys are session-only by default and remain on your device if you opt in to persistent storage. Google Earth Engine OAuth access tokens are kept only for the current browser session. You can delete this data using the extension's clearing controls, by removing the extension, or by clearing browser extension data.
+Settings, conversation history, plan history, a reasoning-control ledger without detailed chain-of-thought, code-card and local-preflight snapshots, documentation caches, and optional local Shapefile entries are stored in your browser's `chrome.storage`. The control ledger contains only goals, constraints, verification coverage, open items, next actions, and failure signatures; live `reasoning_content` is never stored. API keys are session-only by default and remain on your device if you opt in to persistent storage. Google Earth Engine OAuth access tokens are kept only for the current browser session. You can delete this data using the extension's clearing controls, by removing the extension, or by clearing browser extension data.
 
 ## 第三方服务责任边界 / Third-party services
 

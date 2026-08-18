@@ -30,8 +30,8 @@ English: Lets the user copy generated code or asset IDs to the clipboard with on
 
 ### unlimitedStorage
 
-中文：在本地保存用户的对话记录、计划历史与代码卡快照，确保关闭或重新打开侧栏后内容可以恢复。所有数据仅存储在用户本机的浏览器中。
-English: Stores the user's conversation history, plan history, and code-card snapshots locally so content can be restored after the side panel is closed or reopened. All data is stored only in the user's own browser.
+中文：在本地保存用户的对话记录、计划历史、不含详细思维链的推理控制账本与代码卡/预检快照，确保关闭或重新打开侧栏后内容可以恢复。所有数据仅存储在用户本机的浏览器中。
+English: Stores the user's conversation history, plan history, a reasoning-control ledger without detailed chain-of-thought, and code-card/preflight snapshots locally so content can be restored after the side panel is closed or reopened. All data is stored only in the user's own browser.
 
 ### optional_host_permissions（`https://*/*`、`http://localhost/*`、`http://127.0.0.1/*`）
 
@@ -57,7 +57,7 @@ English: These are optional host permissions and are never granted upfront. When
 - 显示逐行差异预览，经你确认后才替换完整脚本或在光标处插入。
 - Dataset Search 与 Docs Search：检索 Earth Engine 官方数据目录与开发者文档，核验数据集 ID、波段与时间范围，结果作为有边界的参考上下文。
 - 计划模式：先检索官方资料、比较数据集、澄清分析口径，经确认后再生成代码。
-- 对话记录、计划历史与代码卡快照本地保存，重新打开侧栏可恢复。
+- 对话记录、计划历史、推理控制账本与代码卡/预检快照本地保存，重新打开侧栏可恢复；详细思维链不保存。
 - 上传 Shapefile（`.shp`/`.shx`/`.dbf` 等）入库为云端 Table 资产。
 
 **重要声明**
@@ -79,7 +79,7 @@ English: These are optional host permissions and are never granted upfront. When
 - Shows a line-by-line diff and replaces the script or inserts at the cursor only after you confirm.
 - Dataset Search and Docs Search against the official Earth Engine data catalog and developer docs, verifying dataset IDs, bands, and time ranges.
 - Plan mode: research official sources, compare datasets, and clarify the analysis before generating code.
-- Conversation history, plan history, and code-card snapshots are stored locally and restored when you reopen the side panel.
+- Conversation history, plan history, a reasoning-control ledger, and code-card/preflight snapshots are stored locally and restored when you reopen the side panel; detailed chain-of-thought is not stored.
 - Upload Shapefiles (`.shp`/`.shx`/`.dbf`, etc.) as cloud Table assets.
 
 **Important disclosures**

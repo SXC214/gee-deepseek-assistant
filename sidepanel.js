@@ -933,8 +933,10 @@ async function startNewConversation() {
   resetPlanOptionSelections();
   lastConsoleDiagnostic = null;
   elements.consoleRepairButton.classList.add("hidden");
+  renderReasoningControl(null);
   elements.conversation.replaceChildren(
     elements.conversationEmpty,
+    elements.reasoningControl,
     elements.toolResults,
     elements.planPanel,
     elements.candidatePanel
@@ -1182,13 +1184,38 @@ async function restoreActivePlan() {
 async function restoreReasoningSession() {
   const restored = await readReasoningSession(chrome.storage.local);
   if (restored) orchestrator.updateReasoningSession(restored);
+  renderReasoningControl(restored);
 }
 
 function persistReasoningSession(session = orchestrator.getReasoningSession()) {
+  renderReasoningControl(session);
   reasoningWrite = reasoningWrite
     .catch(() => undefined)
     .then(() => writeReasoningSession(chrome.storage.local, session));
   return reasoningWrite;
+}
+
+function renderReasoningControl(session) {
+  const visible = Boolean(session && ["full", "loop"].includes(session.pass));
+  elements.reasoningControl.classList.toggle("hidden", !visible);
+  if (!visible) {
+    syncConversationEmptyState();
+    return;
+  }
+  elements.reasoningControlPass.textContent = session.pass.toUpperCase();
+  elements.reasoningControlPass.classList.toggle("processing", session.pass === "loop");
+  elements.reasoningControlGoal.textContent = `Goal：${session.goal?.text || "未设置"}`;
+  const openCount = (session.open || []).filter((item) => item.status === "open").length;
+  elements.reasoningControlCounts.textContent = [
+    `Core ${session.core?.length || 0}`,
+    `Verified ${session.verified?.length || 0}`,
+    `Open ${openCount}`,
+    `Failure ${session.failures?.length || 0}`,
+    `Seam ${session.seamCount || 0}`
+  ].join(" · ");
+  elements.reasoningControlNext.textContent = `Next：${session.next?.description || "等待下一步"}`;
+  elements.conversation.appendChild(elements.reasoningControl);
+  syncConversationEmptyState();
 }
 
 async function persistActivePlan(plan = orchestrator.getActivePlan()) {
@@ -2065,7 +2092,7 @@ async function runScript() {
   lastConsoleDiagnostic = observed.diagnostic;
   elements.consoleRepairButton.classList.remove("hidden");
   await orchestrator.recordObservedFailure(
-    `${observed.diagnostic.signature} ${observed.diagnostic.excerpt.slice(-2000)}`,
+    `${observed.diagnostic.signature}：用户显式运行后捕获到真实 GEE Console 错误；等待携带证据的诊断式修复`,
     "gee_console"
   ).catch(() => undefined);
   appendMessage(
@@ -2245,6 +2272,7 @@ function syncConversationEmptyState() {
   const hasTransient = Boolean(elements.conversation.querySelector(".reasoning-message"));
   const hasContent = chatHistory.length > 0
     || hasTransient
+    || !elements.reasoningControl.classList.contains("hidden")
     || Boolean(candidate)
     || Boolean(orchestrator.getActivePlan())
     || elements.planMode.checked
