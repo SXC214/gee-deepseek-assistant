@@ -14,16 +14,19 @@ import {
   CHAT_HISTORY_KEY,
   CODE_CANDIDATE_KEY,
   MESSAGE_QUEUE_KEY,
+  REASONING_SESSION_KEY,
   isQuotaExceededError,
   readActivePlan,
   readChatHistory,
   readCodeCandidate,
   readMessageQueue,
+  readReasoningSession,
   readShpAssets,
   serializeActivePlan,
   serializeCodeCandidate,
   setWithQuotaEviction,
   writeMessageQueueSnapshot,
+  writeReasoningSession,
   writeShpAssets
 } from "./lib/storage.js";
 import {
@@ -62,6 +65,7 @@ let chatHistory = [];
 let chatHistoryWrite = Promise.resolve();
 let candidateWrite = Promise.resolve();
 let queueWrite = Promise.resolve();
+let reasoningWrite = Promise.resolve();
 let currentSettings = null;
 let busy = false;
 let initialized = false;
@@ -103,6 +107,7 @@ const orchestrator = createOrchestrator({
   renderPlan,
   persistMessageQueue,
   persistActivePlan,
+  persistReasoningSession,
   onSettingsLoaded: (settings) => { currentSettings = settings; },
   renderToolSources,
   setToolActivityState,
@@ -133,6 +138,7 @@ async function initialize() {
     await restoreChatHistory();
     await restoreMessageQueue();
     await restoreActivePlan();
+    await restoreReasoningSession();
     await restoreLocalShpAssets();
     await restoreWorkspaceConnection();
     await readEditor({ quiet: true });
@@ -910,7 +916,8 @@ function persistChatHistory() {
 async function startNewConversation() {
   if (!initialized) return showError("助手仍在初始化，请稍候");
   if (busy) return showError("当前任务仍在运行，请先停止后再开始新对话");
-  const hasCurrentWork = chatHistory.length || orchestrator.getActivePlan() || candidate || orchestrator.getQueue().length;
+  const hasCurrentWork = chatHistory.length || orchestrator.getActivePlan() || orchestrator.getReasoningSession()
+    || candidate || orchestrator.getQueue().length;
   if (hasCurrentWork && !confirm("开始新对话会清除当前聊天、计划、代码卡和后续消息队列。确定继续吗？")) return;
   chatHistory = [];
   orchestrator.resetForNewConversation();
@@ -926,13 +933,15 @@ async function startNewConversation() {
   await Promise.all([
     chatHistoryWrite.catch((error) => console.error("等待对话写入完成时出错：", error)),
     candidateWrite.catch((error) => console.error("等待代码候选写入完成时出错：", error)),
-    queueWrite.catch((error) => console.error("等待消息队列写入完成时出错：", error))
+    queueWrite.catch((error) => console.error("等待消息队列写入完成时出错：", error)),
+    reasoningWrite.catch((error) => console.error("等待推理状态写入完成时出错：", error))
   ]);
   await Promise.all([
     chrome.storage.local.remove(CHAT_HISTORY_KEY),
     chrome.storage.local.remove(ACTIVE_PLAN_KEY),
     chrome.storage.local.remove(CODE_CANDIDATE_KEY),
-    chrome.storage.local.remove(MESSAGE_QUEUE_KEY)
+    chrome.storage.local.remove(MESSAGE_QUEUE_KEY),
+    chrome.storage.local.remove(REASONING_SESSION_KEY)
   ]);
   selectComposerMode(false, { quiet: true });
   renderPlan();
@@ -1158,6 +1167,18 @@ async function restoreActivePlan() {
   }
   syncPlanModeUi();
   renderPlan();
+}
+
+async function restoreReasoningSession() {
+  const restored = await readReasoningSession(chrome.storage.local);
+  if (restored) orchestrator.updateReasoningSession(restored);
+}
+
+function persistReasoningSession(session = orchestrator.getReasoningSession()) {
+  reasoningWrite = reasoningWrite
+    .catch(() => undefined)
+    .then(() => writeReasoningSession(chrome.storage.local, session));
+  return reasoningWrite;
 }
 
 async function persistActivePlan(plan = orchestrator.getActivePlan()) {

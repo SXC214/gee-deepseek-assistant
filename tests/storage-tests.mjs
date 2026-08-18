@@ -4,6 +4,7 @@ import {
   CHAT_HISTORY_KEY,
   CODE_CANDIDATE_KEY,
   MESSAGE_QUEUE_KEY,
+  REASONING_SESSION_KEY,
   candidateMetaOnly,
   halveChatHistory,
   isQuotaExceededError,
@@ -11,12 +12,15 @@ import {
   readChatHistory,
   readCodeCandidate,
   readMessageQueue,
+  readReasoningSession,
   serializeActivePlan,
   serializeCodeCandidate,
   setWithQuotaEviction,
-  writeMessageQueueSnapshot
+  writeMessageQueueSnapshot,
+  writeReasoningSession
 } from "../lib/storage.js";
 import { createPlanSession, setPlanState } from "../lib/plan.js";
+import { createReasoningSession } from "../lib/reasoning-state.js";
 
 // halveChatHistory keeps the newest half and tolerates tiny or invalid input.
 assert.deepEqual(halveChatHistory([1, 2, 3, 4]), [3, 4]);
@@ -294,6 +298,7 @@ assert.equal(CHAT_HISTORY_KEY, "chatHistoryV1");
 assert.equal(CODE_CANDIDATE_KEY, "codeCandidateV1");
 assert.equal(MESSAGE_QUEUE_KEY, "messageQueueV1");
 assert.equal(ACTIVE_PLAN_KEY, "activePlanV1");
+assert.equal(REASONING_SESSION_KEY, "reasoningSessionV1");
 
 // readChatHistory sanitizes stored entries and drops corrupted ones.
 {
@@ -384,6 +389,22 @@ assert.equal(ACTIVE_PLAN_KEY, "activePlanV1");
   assert.equal(ACTIVE_PLAN_KEY in storage.data, false, "absent plan is written as removal");
 
   assert.equal(await serializeActivePlan(createFakeStorage(), { originalRequest: "" }), null);
+}
+
+// The reasoning ledger round-trips only its public control state and removes
+// invalid or absent sessions without persisting private reasoning fields.
+{
+  const storage = createFakeStorage();
+  const session = createReasoningSession({ conversationId: "c1", pass: "loop", prompt: "修复 Console 错误" });
+  const written = await writeReasoningSession(storage, session);
+  assert.equal(written.pass, "loop");
+  assert.equal(storage.data[REASONING_SESSION_KEY].goal.text, "修复 Console 错误");
+  const restored = await readReasoningSession(storage);
+  assert.equal(restored.conversationId, "c1");
+  assert.doesNotMatch(JSON.stringify(restored), /reasoning_content|tool_calls/i);
+
+  await writeReasoningSession(storage, null);
+  assert.equal(REASONING_SESSION_KEY in storage.data, false);
 }
 
 console.log("Storage eviction tests passed.");
