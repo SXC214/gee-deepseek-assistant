@@ -538,6 +538,43 @@ function createTodoPlanAnswer(taskCount) {
   assert.equal(calls.appended.filter((entry) => entry.role === "error").length, 0);
 }
 
+// The no-tools synthesis prompt carries a bounded official-source snapshot so
+// broad catalog searches cannot duplicate an unbounded amount of tool output.
+{
+  const oversizedSources = Array.from({ length: 25 }, (_, index) => ({
+    type: "dataset",
+    title: `Dataset ${index + 1}`,
+    datasetId: `TEST/DATASET_${index + 1}`,
+    url: `https://developers.google.com/earth-engine/datasets/catalog/TEST_DATASET_${index + 1}`,
+    snippet: `snippet-${index + 1}-` + "s".repeat(900),
+    summary: `summary-${index + 1}-` + "x".repeat(4000)
+  }));
+  const { calls, orchestrator } = createHarness({
+    settingsOverride: {
+      baseUrl: "https://api.deepseek.com/v1",
+      model: "deepseek-v4-flash",
+      supportsThinking: true
+    },
+    toolSearchResponse: {
+      ok: true,
+      context: "官方目录检索完成。",
+      sources: oversizedSources,
+      warnings: []
+    },
+    streamResponses: [
+      { content: "工具阶段完成。" },
+      { content: createTodoPlanAnswer(4) }
+    ]
+  });
+  await orchestrator.executePrompt("设计广州 2010-2025 年 NDVI 方案", true);
+
+  const synthesisPrompt = calls.portPosts[1].payload.messages.at(-1).content;
+  assert.equal((synthesisPrompt.match(/\[DATASET \d+\]/g) || []).length, 20);
+  assert.match(synthesisPrompt, /TEST\/DATASET_20/);
+  assert.doesNotMatch(synthesisPrompt, /TEST\/DATASET_21/);
+  assert.ok(synthesisPrompt.length < 45000, `bounded synthesis prompt was ${synthesisPrompt.length} chars`);
+}
+
 // If an unparseable answer remains invalid after the single no-tools repair,
 // planning must continue with the deterministic local skeleton.
 {
