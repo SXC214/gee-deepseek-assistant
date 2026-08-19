@@ -304,7 +304,7 @@ npm run diagnose:extension:install
 # 无界面启动检查 / headless boot diagnostic
 npm run diagnose:extension
 
-# 不调用真实 API，模拟 2 项→3 项非法 TODO 并验证本地 4 项兜底
+# 不调用真实 API，模拟工具阶段与非法 TODO 综合，并验证本地补齐为 4 项
 npm run diagnose:extension:mock
 
 # 使用 DEEPSEEK_API_KEY 真实设计广州 2010–2025 年 NDVI 方案

@@ -280,14 +280,18 @@ async function runMockTodoRecovery(page, currentReport) {
   const settingsClose = page.locator("#closeSettingsButton");
   if (await settingsClose.isVisible()) await settingsClose.click();
   await page.locator("#planModeButton").click();
-  await page.locator("#prompt").fill("Playwright 本地诊断：验证 TODO 数量自动修复与安全兜底");
+  await page.locator("#prompt").fill("Playwright 本地诊断：验证 TODO 数量本地校正");
   await page.locator("#sendButton").click();
   currentReport.scenario.finalStatus = await waitForPlanTurnCompletion(page, 75_000);
   const snapshot = await readSidepanelSnapshot(page);
+  currentReport.scenario.historyAudit = await auditHistoryWindow(page);
   currentReport.scenario.passed = currentReport.scenario.apiCalls === 2
     && /等待需求澄清/.test(currentReport.scenario.finalStatus)
-    && /本地安全的 4 项 TODO 骨架/.test(snapshot.conversation)
-    && /确认分析目标与边界/.test(snapshot.plan);
+    && /本地完成结构校正/.test(snapshot.conversation)
+    && /模拟任务 1/.test(snapshot.plan)
+    && snapshot.timelineLiveCardCount === 0
+    && snapshot.liveWorkspaceOrder.join(",") === "reasoningStreamSlot,reasoningControl,toolResults,planPanel,candidatePanel"
+    && currentReport.scenario.historyAudit.passed;
   currentReport.scenario.status = currentReport.scenario.passed ? "passed" : "failed";
 }
 
@@ -450,14 +454,102 @@ function validateApiKey(value) {
 
 async function waitForPlanTurnCompletion(page, timeoutMs) {
   const started = Date.now();
+  let stableSignature = "";
+  let stableReads = 0;
   while (Date.now() - started < timeoutMs) {
-    const status = await page.locator("#statusText").textContent().catch(() => "");
-    if (/等待需求澄清|方案待审阅|计划请求失败|请求失败/.test(String(status || ""))) {
-      return String(status || "").trim();
+    const observation = await page.evaluate(async () => {
+      const status = document.querySelector("#statusText")?.textContent?.trim() || "";
+      const turnState = document.querySelector("#turnStateBadge")?.textContent?.trim() || "";
+      const stored = await new Promise((resolve) => chrome.storage.local.get("activePlanV1", resolve));
+      const session = stored.activePlanV1 || {};
+      return {
+        status,
+        turnState,
+        planRevision: Number(session.planRevision || 0),
+        planState: String(session.state || ""),
+        todoCount: Array.isArray(session.plan?.todoList) ? session.plan.todoList.length : 0
+      };
+    }).catch(() => ({ status: "", turnState: "", planRevision: 0, planState: "", todoCount: 0 }));
+    const failed = /计划请求失败|请求失败/.test(observation.status);
+    const succeeded = /等待需求澄清|方案待审阅/.test(observation.status)
+      && /clarifying|ready/.test(observation.planState)
+      && observation.planRevision > 0
+      && observation.todoCount >= 4;
+    if (observation.turnState === "就绪" && (failed || succeeded)) {
+      const signature = JSON.stringify(observation);
+      stableReads = signature === stableSignature ? stableReads + 1 : 1;
+      stableSignature = signature;
+      if (stableReads >= 2) return observation.status;
+    } else {
+      stableReads = 0;
+      stableSignature = "";
     }
     await page.waitForTimeout(250);
   }
   throw new Error(`模拟计划请求在 ${timeoutMs}ms 内没有结束`);
+}
+
+async function auditHistoryWindow(page) {
+  const originalHistory = await page.evaluate(async () => {
+    const stored = await new Promise((resolve) => chrome.storage.local.get("chatHistoryV1", resolve));
+    const original = Array.isArray(stored.chatHistoryV1) ? stored.chatHistoryV1 : [];
+    const baseTime = Date.now() - 75_000;
+    const synthetic = Array.from({ length: 75 }, (_, index) => ({
+      schemaVersion: 1,
+      id: `history-audit-${index}`,
+      role: index % 2 === 0 ? "user" : "assistant",
+      purpose: "direct",
+      text: `历史性能测试 ${index} ${"x".repeat(2000)}`,
+      createdAt: baseTime + index
+    }));
+    await new Promise((resolve) => chrome.storage.local.set({ chatHistoryV1: synthetic }, resolve));
+    return original;
+  });
+
+  try {
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.locator("#conversationTimeline").waitFor({ state: "attached" });
+    await page.waitForFunction(() => (
+      document.querySelector("#sendButton")?.disabled === false
+      && document.querySelector("#turnStateBadge")?.textContent?.trim() === "就绪"
+    ));
+    await page.waitForFunction(() => document.querySelectorAll("#conversationTimeline [data-chat-id]").length === 30);
+    const initial = await page.evaluate(() => ({
+      count: document.querySelectorAll("#conversationTimeline [data-chat-id]").length,
+      firstId: document.querySelector("#conversationTimeline [data-chat-id]")?.dataset.chatId || "",
+      loaderVisible: !document.querySelector("#historyLoadOlderButton")?.classList.contains("hidden"),
+      timelineLiveCardCount: document.querySelectorAll("#conversationTimeline #reasoningControl, #conversationTimeline #toolResults, #conversationTimeline #planPanel, #conversationTimeline #candidatePanel").length
+    }));
+    await page.evaluate(() => { document.querySelector("#conversation").scrollTop = 200; });
+    const beforeTop = await page.locator("#conversation").evaluate((element) => element.scrollTop);
+    await page.evaluate(() => document.querySelector("#historyLoadOlderButton")?.click());
+    await page.waitForFunction(() => document.querySelectorAll("#conversationTimeline [data-chat-id]").length === 60);
+    await page.waitForTimeout(100);
+    const expanded = await page.evaluate(() => ({
+      count: document.querySelectorAll("#conversationTimeline [data-chat-id]").length,
+      firstId: document.querySelector("#conversationTimeline [data-chat-id]")?.dataset.chatId || "",
+      scrollTop: document.querySelector("#conversation")?.scrollTop || 0
+    }));
+    return {
+      passed: initial.count === 30
+        && initial.firstId === "history-audit-45"
+        && initial.loaderVisible
+        && initial.timelineLiveCardCount === 0
+        && expanded.count === 60
+        && expanded.firstId === "history-audit-15"
+        && expanded.scrollTop >= beforeTop,
+      initial,
+      expanded,
+      beforeTop
+    };
+  } finally {
+    await page.evaluate(async (history) => {
+      await new Promise((resolve) => chrome.storage.local.set({ chatHistoryV1: history }, resolve));
+    }, originalHistory);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.locator("#conversationTimeline").waitFor({ state: "attached" });
+    await page.waitForFunction(() => document.querySelector("#sendButton")?.disabled === false);
+  }
 }
 
 function createMockTodoPlan(taskCount) {
@@ -644,6 +736,10 @@ async function readSidepanelSnapshot(page) {
       turnState: text("#turnStateBadge"),
       keyStatus: text("#keyStatus"),
       conversation: text("#conversation").slice(-30_000),
+      renderedChatCount: document.querySelectorAll("#conversationTimeline [data-chat-id]").length,
+      hasHistoryLoader: visible("#historyLoadOlderButton"),
+      timelineLiveCardCount: document.querySelectorAll("#conversationTimeline #reasoningControl, #conversationTimeline #toolResults, #conversationTimeline #planPanel, #conversationTimeline #candidatePanel").length,
+      liveWorkspaceOrder: [...document.querySelectorAll("#liveWorkspace > [id]")].map((element) => element.id),
       planVisible: visible("#planPanel"),
       plan: text("#planPanel").slice(-20_000),
       candidateVisible: visible("#candidatePanel"),
@@ -681,6 +777,13 @@ async function readGeePageSnapshot(page) {
 function buildFindings(currentReport) {
   const findings = [];
   const errorEvents = currentReport.events.filter((event) => event.level === "error");
+  if (currentReport.sidepanel?.timelineLiveCardCount > 0) {
+    findings.push({
+      severity: "error",
+      code: "timeline_contains_live_cards",
+      summary: "实时状态卡被插入了历史消息时间线"
+    });
+  }
   if (errorEvents.length) {
     findings.push({
       severity: "error",
@@ -728,12 +831,23 @@ function buildFindings(currentReport) {
       ? {
         severity: "info",
         code: "todo_recovery_passed",
-        summary: "两次非法 TODO 响应已按预期执行单次模型修复并进入本地 4 项安全兜底"
+        summary: "工具调研与 JSON 综合已分离，非法 TODO 数量已在本地校正为 4 项"
       }
       : {
         severity: "error",
         code: "todo_recovery_failed",
         summary: `TODO 恢复场景未通过：API 调用 ${currentReport.scenario.apiCalls} 次，状态 ${currentReport.scenario.finalStatus || currentReport.scenario.status}`
+      });
+    findings.push(currentReport.scenario.historyAudit?.passed
+      ? {
+        severity: "info",
+        code: "history_window_passed",
+        summary: "75 条长历史按 30 条分页渲染，加载更早消息后滚动锚点保持稳定"
+      }
+      : {
+        severity: "error",
+        code: "history_window_failed",
+        summary: "长历史分页、时间线隔离或滚动锚点检查未通过"
       });
   }
   if (currentReport.scenario?.name === "live_guangzhou_ndvi_plan") {
