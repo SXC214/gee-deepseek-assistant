@@ -566,6 +566,64 @@ function createTodoPlanAnswer(taskCount) {
   assert.ok(calls.appended.some((entry) => entry.purpose === "plan_action" && /无法解析且自动结构修复仍未通过/.test(entry.text)));
 }
 
+// A currentTodoId that points at a pending task receives the same single
+// no-tools repair used for other TODO-structure consistency failures.
+{
+  const pointerMismatch = JSON.parse(createTodoPlanAnswer(4));
+  pointerMismatch.currentTodoId = "todo_2";
+  const { calls, orchestrator } = createHarness({
+    settingsOverride: {
+      baseUrl: "https://api.deepseek.com/v1",
+      model: "deepseek-v4-flash",
+      supportsThinking: true
+    },
+    streamResponses: [
+      { content: JSON.stringify(pointerMismatch) },
+      { content: createTodoPlanAnswer(4) }
+    ]
+  });
+  await orchestrator.executePrompt("计算广州市 2010-2025 年 NDVI", true);
+
+  assert.deepEqual(
+    calls.portPosts.map((entry) => entry.payload.purpose),
+    ["plan_research", "plan_research_structure_repair"]
+  );
+  assert.deepEqual(calls.portPosts[1].payload.tools, [], "pointer repair must not expose tools");
+  assert.match(calls.portPosts[1].payload.messages.at(-1).content, /currentTodoId must reference the in_progress task/);
+  assert.equal(orchestrator.getActivePlan().plan.currentTodoId, "todo_1");
+  assert.equal(orchestrator.getActivePlan().plan.todoList[0].status, "in_progress");
+  assert.equal(calls.appended.filter((entry) => entry.role === "error").length, 0);
+  assert.ok(calls.appended.some((entry) => entry.purpose === "plan_action" && /TODO 结构未通过一致性校验/.test(entry.text)));
+}
+
+// A repeated pointer mismatch after the sole model repair degrades to the
+// deterministic local skeleton instead of terminating the plan turn.
+{
+  const pointerMismatch = JSON.parse(createTodoPlanAnswer(4));
+  pointerMismatch.currentTodoId = "todo_2";
+  const invalidAnswer = JSON.stringify(pointerMismatch);
+  const { calls, orchestrator } = createHarness({
+    settingsOverride: {
+      baseUrl: "https://api.deepseek.com/v1",
+      model: "deepseek-v4-flash",
+      supportsThinking: true
+    },
+    streamResponses: [
+      { content: invalidAnswer },
+      { content: invalidAnswer }
+    ]
+  });
+  await orchestrator.executePrompt("计算广州市 2010-2025 年 NDVI", true);
+
+  assert.equal(calls.portPosts.length, 2, "pointer recovery must never recurse");
+  const recovered = orchestrator.getActivePlan();
+  assert.equal(recovered.plan.todoList.length, 4);
+  assert.equal(recovered.plan.todoList[0].title, "确认分析目标与边界");
+  assert.equal(recovered.plan.currentTodoId, "todo_1");
+  assert.equal(calls.appended.filter((entry) => entry.role === "error").length, 0);
+  assert.ok(calls.appended.some((entry) => entry.purpose === "plan_action" && /本地安全的 4 项 TODO 骨架/.test(entry.text)));
+}
+
 // An official V4 plan with too few TODOs receives exactly one no-tools JSON
 // structure repair. A valid repair is applied and both requests count toward
 // the displayed usage.
