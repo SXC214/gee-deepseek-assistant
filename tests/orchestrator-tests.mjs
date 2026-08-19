@@ -512,6 +512,60 @@ function createTodoPlanAnswer(taskCount) {
   assert.ok(calls.statuses.some((status) => status.text.startsWith("等待需求澄清")));
 }
 
+// An unparseable official V4 plan receives exactly one no-tools JSON repair;
+// a valid repaired object continues the plan turn without surfacing an error.
+{
+  const { calls, orchestrator } = createHarness({
+    settingsOverride: {
+      baseUrl: "https://api.deepseek.com/v1",
+      model: "deepseek-v4-flash",
+      supportsThinking: true
+    },
+    streamResponses: [
+      { content: "我已完成调研，下一步将整理为 JSON。" },
+      { content: createTodoPlanAnswer(4) }
+    ]
+  });
+  await orchestrator.executePrompt("设计广州 2010-2025 年 NDVI 方案", true);
+
+  assert.deepEqual(
+    calls.portPosts.map((entry) => entry.payload.purpose),
+    ["plan_research", "plan_research_structure_repair"]
+  );
+  assert.deepEqual(calls.portPosts[1].payload.tools, [], "JSON repair must run without tools");
+  assert.match(calls.portPosts[1].payload.messages.at(-1).content, /待修复模型内容/);
+  assert.equal(orchestrator.getActivePlan().plan.todoList.length, 4);
+  assert.equal(orchestrator.getActivePlan().state, "clarifying");
+  assert.equal(calls.appended.filter((entry) => entry.role === "error").length, 0);
+  assert.ok(calls.appended.some((entry) => entry.purpose === "plan_action" && /不是有效 JSON，已完成一次受限结构修复/.test(entry.text)));
+}
+
+// If an unparseable answer remains invalid after the single no-tools repair,
+// planning must continue with the deterministic local skeleton.
+{
+  const { calls, orchestrator } = createHarness({
+    settingsOverride: {
+      baseUrl: "https://api.deepseek.com/v1",
+      model: "deepseek-v4-flash",
+      supportsThinking: true
+    },
+    streamResponses: [
+      { content: "尚未输出 JSON。" },
+      { content: "修复后仍然不是 JSON。" }
+    ]
+  });
+  await orchestrator.executePrompt("设计广州 2010-2025 年 NDVI 方案", true);
+
+  assert.equal(calls.portPosts.length, 2, "unparseable recovery must never recurse");
+  assert.deepEqual(calls.portPosts[1].payload.tools, []);
+  const recovered = orchestrator.getActivePlan();
+  assert.equal(recovered.plan.todoList.length, 4);
+  assert.equal(recovered.plan.todoList[0].title, "确认分析目标与边界");
+  assert.equal(recovered.state, "clarifying");
+  assert.equal(calls.appended.filter((entry) => entry.role === "error").length, 0);
+  assert.ok(calls.appended.some((entry) => entry.purpose === "plan_action" && /无法解析且自动结构修复仍未通过/.test(entry.text)));
+}
+
 // An official V4 plan with too few TODOs receives exactly one no-tools JSON
 // structure repair. A valid repair is applied and both requests count toward
 // the displayed usage.

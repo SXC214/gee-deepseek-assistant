@@ -291,6 +291,39 @@ No build step is required. After changing the source, click "Reload" on the exte
 npm test
 ```
 
+### Playwright 扩展诊断 / Playwright Extension Diagnostics
+
+Playwright 仅作为开发依赖运行，不会打包进 MV3 扩展。诊断器会为启动、mock 和真实任务分别启动项目专属的隔离 Chromium 配置，加载当前源码，收集扩展侧栏、Service Worker、相关网络失败及白名单本地记录，并把脱敏 JSON 报告和截图写入 `artifacts/playwright/`。普通启动和 mock 诊断不会读取 `apiKey`、OAuth token、Cookie 或完整候选代码。
+
+Playwright runs only as a development dependency and is never bundled into the MV3 extension. The diagnostic launches separate isolated project-specific Chromium profiles for boot, mock, and live-task runs, loads the current source, captures side-panel, service-worker, relevant network and allow-listed local records, then writes a redacted JSON report and screenshots under `artifacts/playwright/`. Boot and mock diagnostics never read API keys, OAuth tokens, cookies, or full candidate code.
+
+```bash
+# 首次安装对应的 Chromium / install the matching Chromium once
+npm run diagnose:extension:install
+
+# 无界面启动检查 / headless boot diagnostic
+npm run diagnose:extension
+
+# 不调用真实 API，模拟 2 项→3 项非法 TODO 并验证本地 4 项兜底
+npm run diagnose:extension:mock
+
+# 使用 DEEPSEEK_API_KEY 真实设计广州 2010–2025 年 NDVI 方案
+npm run diagnose:extension:guangzhou-ndvi
+
+# 不调用 API，只审计隔离配置中已保存的广州方案
+npm run diagnose:extension:guangzhou-ndvi:audit
+
+# 也可从纯文本、.env 或 JSON 文件读取本地密钥
+node scripts/diagnose-extension.mjs --api-key-file=C:\安全目录\deepseek-key.txt --live-guangzhou-ndvi
+
+# 显示隔离浏览器，留出 2 分钟手动复现 / headed two-minute reproduction window
+node scripts/diagnose-extension.mjs --headed --wait-ms=120000
+```
+
+真实广州 NDVI 诊断优先读取 `--api-key-file` 指向的纯文本、`.env` 或 JSON 文件；未指定时读取进程环境变量 `DEEPSEEK_API_KEY`。密钥只写入隔离扩展的 `chrome.storage.session`，浏览器关闭后失效；报告只记录凭据来源和 `hasApiKey` 等非敏感状态。隔离配置保存在 `.playwright/`，不会读取或修改日常使用的 Chrome/Edge 配置，目录与所有报告均由 Git 忽略。
+
+The live Guangzhou diagnostic reads a key from `--api-key-file` (plain text, `.env`, or JSON), or from `DEEPSEEK_API_KEY` when no file is specified. The key exists only in memory and the isolated extension's `chrome.storage.session`, which expires when Chromium closes; reports retain only the credential source and non-sensitive states such as `hasApiKey`. Profiles and reports stay under Git-ignored `.playwright/` and `artifacts/playwright/` directories and never touch the regular Chrome/Edge profile.
+
 ## 许可证 / License
 
 [MIT](./LICENSE)

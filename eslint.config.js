@@ -117,6 +117,28 @@ export default [
     rules: baseRules
   },
   {
+    // Node diagnostics containing callbacks evaluated inside extension pages.
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "module",
+      globals: {
+        ...extensionGlobals,
+        process: "readonly",
+        globalThis: "readonly",
+        Buffer: "readonly",
+        DOMException: "readonly",
+        Response: "readonly",
+        Headers: "readonly",
+        FormData: "readonly",
+        Blob: "readonly",
+        document: "readonly",
+        location: "readonly"
+      }
+    },
+    rules: baseRules
+  },
+  {
     // Config file itself.
     files: ["eslint.config.js"],
     languageOptions: {

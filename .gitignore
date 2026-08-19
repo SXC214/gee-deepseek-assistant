@@ -1,6 +1,8 @@
 # Dependencies and generated output
 node_modules/
 dist/
+.playwright/
+artifacts/playwright/
 *.zip
 *.crx
 

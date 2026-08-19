@@ -6,10 +6,16 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "diagnose:extension": "node scripts/diagnose-extension.mjs",
+    "diagnose:extension:mock": "node scripts/diagnose-extension.mjs --mock-todo-recovery",
+    "diagnose:extension:guangzhou-ndvi": "node scripts/diagnose-extension.mjs --live-guangzhou-ndvi",
+    "diagnose:extension:guangzhou-ndvi:audit": "node scripts/diagnose-extension.mjs --audit-guangzhou-ndvi",
+    "diagnose:extension:install": "playwright install chromium",
     "lint": "eslint . --max-warnings=11",
     "test": "node tests/run-tests.mjs && node tests/http-tests.mjs && node tests/response-tests.mjs && node tests/search-tests.mjs && node tests/api-tests.mjs && node tests/sse-tests.mjs && node tests/plan-tests.mjs && node tests/chat-tests.mjs && node tests/candidate-tests.mjs && node tests/storage-tests.mjs && node tests/queue-tests.mjs && node tests/conversation-tests.mjs && node tests/console-context-tests.mjs && node tests/console-reader-tests.mjs && node tests/reasoning-gate-tests.mjs && node tests/reasoning-state-tests.mjs && node tests/agent-tools-tests.mjs && node tests/gee-validator-tests.mjs && node tests/gee-rest-tests.mjs && node tests/service-worker-tests.mjs && node tests/ui-behavior-tests.mjs && node tests/orchestrator-tests.mjs && node tests/diff-tests.mjs && node tests/ui-tests.mjs && node tests/provider-presets-tests.mjs && node tests/bridge-tests.mjs && node tests/page-bridge-shp-tests.mjs && node tests/shapefile-tests.mjs"
   },
   "devDependencies": {
-    "eslint": "^9.39.5"
+    "eslint": "^9.39.5",
+    "playwright": "1.59.1"
   }
 }
