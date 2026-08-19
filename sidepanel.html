@@ -153,22 +153,27 @@
           <div class="chat-header">
             <div>
               <strong id="conversationTitle">当前对话</strong>
-              <span class="chat-subtitle">回答、活动、计划和代码按时间排列</span>
+              <span class="chat-subtitle">历史消息按时间排列，实时计划固定显示</span>
             </div>
             <span id="turnStateBadge" class="badge muted">就绪</span>
           </div>
 
-          <section id="conversation" class="conversation" role="log" aria-live="polite" aria-relevant="additions text">
-            <div id="conversationEmpty" class="conversation-empty">
-              <strong>从一个 GEE 分析任务开始</strong>
-              <span>可以直接修复代码，也可以先进入计划模式调研数据和方法。</span>
-              <div class="starter-list">
-                <button class="starter-prompt" type="button" data-prompt="检查当前 GEE 脚本的报错并给出完整修复代码">检查并修复当前脚本</button>
-                <button class="starter-prompt" type="button" data-plan="true" data-prompt="帮我规划一个多年 NDVI 均值变化分析，先比较可用数据集并澄清统计口径">规划多年 NDVI 分析</button>
+          <section id="conversation" class="conversation" aria-label="对话与实时工作区">
+            <section id="conversationTimeline" class="conversation-timeline" role="log" aria-live="polite" aria-relevant="additions text">
+              <button id="historyLoadOlderButton" class="history-load hidden" type="button">加载更早消息</button>
+              <div id="conversationEmpty" class="conversation-empty">
+                <strong>从一个 GEE 分析任务开始</strong>
+                <span>可以直接修复代码，也可以先进入计划模式调研数据和方法。</span>
+                <div class="starter-list">
+                  <button class="starter-prompt" type="button" data-prompt="检查当前 GEE 脚本的报错并给出完整修复代码">检查并修复当前脚本</button>
+                  <button class="starter-prompt" type="button" data-plan="true" data-prompt="帮我规划一个多年 NDVI 均值变化分析，先比较可用数据集并澄清统计口径">规划多年 NDVI 分析</button>
+                </div>
               </div>
-            </div>
+            </section>
 
-            <details id="reasoningControl" class="reasoning-control activity-card hidden" aria-label="推理控制状态">
+            <section id="liveWorkspace" class="live-workspace" aria-label="实时计划与执行状态">
+              <div id="reasoningStreamSlot" class="reasoning-stream-slot" aria-live="polite"></div>
+              <details id="reasoningControl" class="reasoning-control activity-card hidden" aria-label="推理控制状态">
               <summary>
                 <span>推理控制</span>
                 <span id="reasoningControlPass" class="badge muted">FAST</span>
@@ -177,6 +182,10 @@
                 <p id="reasoningControlGoal" class="reasoning-control-line"></p>
                 <p id="reasoningControlCounts" class="hint"></p>
                 <p id="reasoningControlNext" class="reasoning-control-line"></p>
+                <details id="reasoningFailureDetails" class="reasoning-failures hidden">
+                  <summary id="reasoningFailureSummary">最近失败</summary>
+                  <ol id="reasoningFailureList"></ol>
+                </details>
               </div>
             </details>
 
@@ -236,6 +245,7 @@
                 <button id="dismissButton" type="button">关闭代码卡</button>
               </div>
               <p id="candidateHint" class="hint">写入前会检查脚本是否被修改；可在 Ace 编辑器中使用 Ctrl+Z 撤销。</p>
+            </section>
             </section>
           </section>
 

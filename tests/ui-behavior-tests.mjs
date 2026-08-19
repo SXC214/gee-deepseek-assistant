@@ -246,7 +246,11 @@ reasoning.complete();
 assert.equal(details.open, false);
 assert.equal(details.querySelector("summary").textContent, "思考过程 · 已完成");
 assert.equal(details.classList.contains("activity-success"), true);
-reasoning.remove();
+const nextReasoning = createReasoningView(fakeDocument, conversation);
+nextReasoning.append("新的模型阶段");
+assert.equal(conversation.children.length, 1, "a new model phase must replace the previous reasoning card");
+assert.equal(conversation.children[0].querySelector("pre").textContent, "新的模型阶段");
+nextReasoning.remove();
 assert.equal(conversation.children.length, 0);
 
 console.log("UI behavior tests passed.");

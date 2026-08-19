@@ -68,6 +68,8 @@ const elements = Object.fromEntries(
 let editorState = null;
 let candidate = null;
 let chatHistory = [];
+const CHAT_RENDER_PAGE_SIZE = 30;
+let visibleChatLimit = CHAT_RENDER_PAGE_SIZE;
 let chatHistoryWrite = Promise.resolve();
 let candidateWrite = Promise.resolve();
 let queueWrite = Promise.resolve();
@@ -80,6 +82,7 @@ let initRetryButton = null;
 let followConversation = true;
 let consoleReadAttempted = false;
 let lastConsoleDiagnostic = null;
+let lastPlanRenderKey = "";
 // Workspace auto-read connection: the toggle persists under
 // workspaceAutoReadV1, and tab switches / completed navigations on the Code
 // Editor trigger one debounced read per tab while connected.
@@ -121,7 +124,7 @@ const orchestrator = createOrchestrator({
   completeToolActivity,
   hideToolResults: () => elements.toolResults.classList.add("hidden"),
   createConsoleContextSection: (state) => createConsoleContextSection(state, elements.includeConsole.checked),
-  createReasoningView: () => createReasoningView(document, elements.conversation),
+  createReasoningView: () => createReasoningView(document, elements.reasoningStreamSlot),
   contextOptions: () => ({
     includeSelection: elements.includeSelection.checked,
     includeCode: elements.includeCode.checked,
@@ -168,7 +171,7 @@ function handleInitializeFailure(error) {
 }
 
 function renderInitializeRetry(error) {
-  const container = elements.conversation;
+  const container = elements.conversationTimeline;
   if (!container) return;
   if (initRetryButton) initRetryButton.closest(".init-retry-notice")?.remove();
   const notice = document.createElement("div");
@@ -252,6 +255,7 @@ function bindEvents() {
   elements.continuePlanButton.addEventListener("click", continuePlanClarification);
   elements.cancelPlanButton.addEventListener("click", cancelPlan);
   elements.scrollToLatestButton.addEventListener("click", () => scrollConversationToEnd({ force: true, smooth: true }));
+  elements.historyLoadOlderButton.addEventListener("click", loadOlderChatHistory);
   elements.conversation.addEventListener("scroll", handleConversationScroll, { passive: true });
   elements.queueList.addEventListener("click", handleQueueAction);
   elements.resumeQueueButton.addEventListener("click", resumeMessageQueue);
@@ -894,10 +898,35 @@ async function restoreChatHistory() {
       .map((entry) => ({ role: entry.role, content: entry.text }))
       .slice(-12)
   ));
-  elements.conversation.replaceChildren();
-  for (const entry of chatHistory) elements.conversation.appendChild(renderChatEntry(entry));
+  visibleChatLimit = CHAT_RENDER_PAGE_SIZE;
+  renderChatWindow();
   syncConversationEmptyState();
   scrollConversationToEnd({ force: true });
+}
+
+function renderChatWindow({ preserveScrollAnchor = false } = {}) {
+  const previousHeight = elements.conversation.scrollHeight;
+  const previousTop = elements.conversation.scrollTop;
+  const start = Math.max(0, chatHistory.length - visibleChatLimit);
+  const fragment = document.createDocumentFragment();
+  elements.historyLoadOlderButton.classList.toggle("hidden", start === 0);
+  if (start > 0) fragment.append(elements.historyLoadOlderButton);
+  for (const entry of chatHistory.slice(start)) fragment.append(renderChatEntry(entry));
+  elements.conversationTimeline.replaceChildren(fragment);
+  if (preserveScrollAnchor) {
+    requestAnimationFrame(() => {
+      const addedHeight = elements.conversation.scrollHeight - previousHeight;
+      elements.conversation.scrollTop = previousTop + Math.max(0, addedHeight);
+      updateScrollFollower();
+    });
+  }
+}
+
+function loadOlderChatHistory() {
+  if (visibleChatLimit >= chatHistory.length) return;
+  visibleChatLimit = Math.min(chatHistory.length, visibleChatLimit + CHAT_RENDER_PAGE_SIZE);
+  renderChatWindow({ preserveScrollAnchor: true });
+  syncConversationEmptyState();
 }
 
 function persistChatHistory() {
@@ -931,16 +960,12 @@ async function startNewConversation() {
   orchestrator.resetForNewConversation();
   candidate = null;
   resetPlanOptionSelections();
+  lastPlanRenderKey = "";
   lastConsoleDiagnostic = null;
   elements.consoleRepairButton.classList.add("hidden");
   renderReasoningControl(null);
-  elements.conversation.replaceChildren(
-    elements.conversationEmpty,
-    elements.reasoningControl,
-    elements.toolResults,
-    elements.planPanel,
-    elements.candidatePanel
-  );
+  visibleChatLimit = CHAT_RENDER_PAGE_SIZE;
+  elements.conversationTimeline.replaceChildren();
   renderToolSources([], []);
   await Promise.all([
     chatHistoryWrite.catch((error) => console.error("等待对话写入完成时出错：", error)),
@@ -1142,9 +1167,11 @@ function applyStorageEvictionOutcome(outcome) {
 function resyncEvictedChatHistory(entries) {
   chatHistory = sanitizeChatHistory(entries);
   const retained = new Set(chatHistory.map((entry) => entry.id));
-  for (const node of elements.conversation.querySelectorAll("[data-chat-id]")) {
+  for (const node of elements.conversationTimeline.querySelectorAll("[data-chat-id]")) {
     if (!retained.has(node.dataset.chatId)) node.remove();
   }
+  visibleChatLimit = Math.min(visibleChatLimit, Math.max(CHAT_RENDER_PAGE_SIZE, chatHistory.length));
+  renderChatWindow();
   orchestrator.setDirectConversation(alignConversationToUser(
     chatHistory
       .filter((entry) => entry.purpose === "direct" && ["user", "assistant"].includes(entry.role))
@@ -1214,7 +1241,18 @@ function renderReasoningControl(session) {
     `Seam ${session.seamCount || 0}`
   ].join(" · ");
   elements.reasoningControlNext.textContent = `Next：${session.next?.description || "等待下一步"}`;
-  elements.conversation.appendChild(elements.reasoningControl);
+  const failures = (session.failures || []).slice(-3).reverse();
+  elements.reasoningFailureDetails.classList.toggle("hidden", failures.length === 0);
+  elements.reasoningFailureSummary.textContent = failures.length
+    ? `最近失败 · ${failures.length} 条（点击查看）`
+    : "最近失败";
+  elements.reasoningFailureList.replaceChildren();
+  for (const failure of failures) {
+    const item = document.createElement("li");
+    const stage = String(failure.signature || "").split(":", 1)[0] || "unknown";
+    item.textContent = `${stage}：${failure.diagnosis || "未记录详细原因"}`;
+    elements.reasoningFailureList.append(item);
+  }
   syncConversationEmptyState();
 }
 
@@ -1475,9 +1513,6 @@ function renderToolSources(sources, warnings) {
     }
     elements.toolSourceList.append(card);
   }
-  if (!elements.toolResults.classList.contains("hidden")) {
-    elements.conversation.appendChild(elements.toolResults);
-  }
   syncConversationEmptyState();
   if (follow) scrollConversationToEnd();
 }
@@ -1490,7 +1525,6 @@ function setToolActivityState(state, title, { collapse = false } = {}) {
   if (state === "processing") {
     elements.toolResults.classList.remove("hidden");
     elements.toolResults.open = true;
-    elements.conversation.appendChild(elements.toolResults);
   }
   if (collapse) elements.toolResults.open = false;
 }
@@ -1504,6 +1538,16 @@ function completeToolActivity() {
 
 function renderPlan() {
   const activePlan = orchestrator.getActivePlan();
+  const renderKey = [
+    elements.planMode.checked ? "plan" : "direct",
+    activePlan?.state || "none",
+    activePlan?.revision || 0,
+    activePlan?.planRevision || 0,
+    activePlan?.planStale ? "stale" : "fresh",
+    busy ? "busy" : "idle"
+  ].join(":");
+  if (renderKey === lastPlanRenderKey) return;
+  lastPlanRenderKey = renderKey;
   const follow = isNearScrollEnd(elements.conversation, 64);
   elements.planContent.replaceChildren();
   if (!elements.planMode.checked && !activePlan) {
@@ -1513,14 +1557,6 @@ function renderPlan() {
     return;
   }
   elements.planPanel.classList.remove("hidden");
-  const latestChatEntry = [...elements.conversation.querySelectorAll(".chat-entry")].at(-1);
-  if (latestChatEntry?.classList.contains("error")) {
-    elements.conversation.insertBefore(elements.planPanel, latestChatEntry);
-  } else if (candidate?.planRevision != null && elements.candidatePanel.parentElement === elements.conversation) {
-    elements.conversation.insertBefore(elements.planPanel, elements.candidatePanel);
-  } else {
-    elements.conversation.appendChild(elements.planPanel);
-  }
   if (!activePlan) {
     elements.planPanel.classList.remove("activity-processing", "activity-success", "activity-error");
     elements.planTitle.textContent = "计划模式";
@@ -1924,7 +1960,6 @@ function renderCandidateCard({ scroll = false } = {}) {
       : "当前脚本未绑定 GEE 标签页。请复制代码并粘贴到 Earth Engine Code Editor；扩展不会自动运行。";
     elements.candidateHint.textContent = [validationHint, applyHint].filter(Boolean).join(" ");
   }
-  placeCandidateCard();
   elements.candidatePanel.classList.remove("hidden");
   syncConversationEmptyState();
   if (scroll && follow) {
@@ -1955,14 +1990,6 @@ function renderCandidateValidation(validation) {
     entry.textContent = `${item.label}：${item.detail}`;
     elements.candidateValidationChecks.append(entry);
   }
-}
-
-function placeCandidateCard() {
-  elements.candidatePanel.dataset.candidateCreatedAt = String(candidate.createdAt);
-  const laterMessage = [...elements.conversation.querySelectorAll("[data-chat-created-at]")]
-    .find((message) => Number(message.dataset.chatCreatedAt) > candidate.createdAt);
-  if (laterMessage) elements.conversation.insertBefore(elements.candidatePanel, laterMessage);
-  else elements.conversation.appendChild(elements.candidatePanel);
 }
 
 function renderDiff(entries) {
@@ -2184,11 +2211,18 @@ function appendMessage(role, text, { purpose = "direct" } = {}) {
   });
   chatHistory = appendChatEntry(chatHistory, entry);
   const retainedIds = new Set(chatHistory.map((item) => item.id));
-  for (const oldMessage of elements.conversation.querySelectorAll("[data-chat-id]")) {
+  for (const oldMessage of elements.conversationTimeline.querySelectorAll("[data-chat-id]")) {
     if (!retainedIds.has(oldMessage.dataset.chatId)) oldMessage.remove();
   }
   const message = renderChatEntry(entry);
-  elements.conversation.appendChild(message);
+  elements.conversationTimeline.appendChild(message);
+  const renderedMessages = [...elements.conversationTimeline.querySelectorAll("[data-chat-id]")];
+  while (renderedMessages.length > visibleChatLimit) renderedMessages.shift()?.remove();
+  const hasOlder = chatHistory.length > visibleChatLimit;
+  elements.historyLoadOlderButton.classList.toggle("hidden", !hasOlder);
+  if (hasOlder && elements.historyLoadOlderButton.parentElement !== elements.conversationTimeline) {
+    elements.conversationTimeline.prepend(elements.historyLoadOlderButton);
+  }
   persistChatHistory().catch((error) => reportPersistFailure("chat", error));
   syncConversationEmptyState();
   if (follow) scrollConversationToEnd();
@@ -2219,10 +2253,14 @@ function renderChatEntry(entry) {
     summary.textContent = entry.purpose === "source"
       ? entry.text.split("\n", 1)[0]
       : `${revision || "计划版本"} · 已保存完整快照`;
-    const snapshot = document.createElement("div");
-    snapshot.className = "message-body transcript-snapshot";
-    snapshot.textContent = entry.text;
-    details.append(summary, snapshot);
+    details.append(summary);
+    details.addEventListener("toggle", () => {
+      if (!details.open || details.querySelector(".transcript-snapshot")) return;
+      const snapshot = document.createElement("div");
+      snapshot.className = "message-body transcript-snapshot";
+      snapshot.textContent = entry.text;
+      details.append(snapshot);
+    });
     message.append(details);
     message.append(createMessageActions(entry));
     return message;
@@ -2278,7 +2316,7 @@ function syncConversationEmptyState() {
     || elements.planMode.checked
     || !elements.toolResults.classList.contains("hidden");
   if (hasContent) elements.conversationEmpty.remove();
-  else if (!elements.conversationEmpty.parentElement) elements.conversation.appendChild(elements.conversationEmpty);
+  else if (!elements.conversationEmpty.parentElement) elements.conversationTimeline.appendChild(elements.conversationEmpty);
 }
 
 function handleConversationScroll() {
