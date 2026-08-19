@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   addPlanAnswer,
   applyPlanResponse,
+  canonicalizeTodoPlanStructure,
   containsFencedCodeBlock,
   createPlanSession,
   createSafeTodoFallbackPlan,
@@ -398,5 +399,50 @@ const mixedOfficialIdentity = restorePlanSession({
 });
 assert.equal(mixedOfficialIdentity.state, "clarifying");
 assert.equal(mixedOfficialIdentity.planStale, true);
+
+const malformedTodoPlan = {
+  status: "needs_clarification",
+  phase: "decomposing",
+  todoList: [
+    {
+      id: "todo_1",
+      title: "解析需求",
+      objective: "提取分析范围",
+      evidenceNeeded: ["用户需求"],
+      status: "pending",
+      result: ""
+    },
+    {
+      id: "todo_1",
+      title: "核验数据",
+      objective: "核验候选数据集",
+      evidenceNeeded: ["官方目录"],
+      status: "in_progress",
+      result: ""
+    }
+  ],
+  completedThisTurn: ["missing"],
+  currentTodoId: "missing",
+  nextTodoId: "todo_1",
+  goal: "设计广州 NDVI 方案",
+  researchSummary: "",
+  datasets: [],
+  requirements: {},
+  method: [],
+  outputs: [],
+  assumptions: [],
+  risks: [],
+  revisionSummary: [],
+  questions: []
+};
+const canonicalTodo = canonicalizeTodoPlanStructure(malformedTodoPlan, {
+  originalRequest: "设计广州 NDVI 方案"
+});
+assert.equal(canonicalTodo.plan.todoList.length, 4);
+assert.equal(new Set(canonicalTodo.plan.todoList.map((todo) => todo.id)).size, 4);
+assert.equal(canonicalTodo.plan.todoList.filter((todo) => todo.status === "in_progress").length, 1);
+assert.equal(canonicalTodo.plan.currentTodoId, canonicalTodo.plan.todoList.find((todo) => todo.status === "in_progress").id);
+assert.equal(canonicalTodo.plan.questions.length, 1);
+assert.equal(validatePlanResponse(canonicalTodo.plan, [], { requireTodoWorkflow: true }).valid, true);
 
 console.log("Plan tests passed.");

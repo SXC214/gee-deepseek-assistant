@@ -512,8 +512,8 @@ function createTodoPlanAnswer(taskCount) {
   assert.ok(calls.statuses.some((status) => status.text.startsWith("等待需求澄清")));
 }
 
-// An unparseable official V4 plan receives exactly one no-tools JSON repair;
-// a valid repaired object continues the plan turn without surfacing an error.
+// Tool-bearing V4 research is followed by a separate no-tools JSON synthesis;
+// prose from the tool phase never becomes the final plan payload.
 {
   const { calls, orchestrator } = createHarness({
     settingsOverride: {
@@ -530,14 +530,12 @@ function createTodoPlanAnswer(taskCount) {
 
   assert.deepEqual(
     calls.portPosts.map((entry) => entry.payload.purpose),
-    ["plan_research", "plan_research_structure_repair"]
+    ["plan_research", "plan_research_synthesis"]
   );
-  assert.deepEqual(calls.portPosts[1].payload.tools, [], "JSON repair must run without tools");
-  assert.match(calls.portPosts[1].payload.messages.at(-1).content, /待修复模型内容/);
+  assert.deepEqual(calls.portPosts[1].payload.tools, [], "JSON synthesis must run without tools");
   assert.equal(orchestrator.getActivePlan().plan.todoList.length, 4);
   assert.equal(orchestrator.getActivePlan().state, "clarifying");
   assert.equal(calls.appended.filter((entry) => entry.role === "error").length, 0);
-  assert.ok(calls.appended.some((entry) => entry.purpose === "plan_action" && /不是有效 JSON，已完成一次受限结构修复/.test(entry.text)));
 }
 
 // If an unparseable answer remains invalid after the single no-tools repair,
@@ -550,14 +548,16 @@ function createTodoPlanAnswer(taskCount) {
       supportsThinking: true
     },
     streamResponses: [
+      { content: "工具阶段分析完成。" },
       { content: "尚未输出 JSON。" },
       { content: "修复后仍然不是 JSON。" }
     ]
   });
   await orchestrator.executePrompt("设计广州 2010-2025 年 NDVI 方案", true);
 
-  assert.equal(calls.portPosts.length, 2, "unparseable recovery must never recurse");
+  assert.equal(calls.portPosts.length, 3, "unparseable recovery must add at most one repair after synthesis");
   assert.deepEqual(calls.portPosts[1].payload.tools, []);
+  assert.deepEqual(calls.portPosts[2].payload.tools, []);
   const recovered = orchestrator.getActivePlan();
   assert.equal(recovered.plan.todoList.length, 4);
   assert.equal(recovered.plan.todoList[0].title, "确认分析目标与边界");
@@ -566,8 +566,8 @@ function createTodoPlanAnswer(taskCount) {
   assert.ok(calls.appended.some((entry) => entry.purpose === "plan_action" && /无法解析且自动结构修复仍未通过/.test(entry.text)));
 }
 
-// A currentTodoId that points at a pending task receives the same single
-// no-tools repair used for other TODO-structure consistency failures.
+// A currentTodoId that points at a pending task is repaired deterministically
+// after strict synthesis without spending another model request.
 {
   const pointerMismatch = JSON.parse(createTodoPlanAnswer(4));
   pointerMismatch.currentTodoId = "todo_2";
@@ -578,26 +578,25 @@ function createTodoPlanAnswer(taskCount) {
       supportsThinking: true
     },
     streamResponses: [
-      { content: JSON.stringify(pointerMismatch) },
-      { content: createTodoPlanAnswer(4) }
+      { content: "工具阶段完成。" },
+      { content: JSON.stringify(pointerMismatch) }
     ]
   });
   await orchestrator.executePrompt("计算广州市 2010-2025 年 NDVI", true);
 
   assert.deepEqual(
     calls.portPosts.map((entry) => entry.payload.purpose),
-    ["plan_research", "plan_research_structure_repair"]
+    ["plan_research", "plan_research_synthesis"]
   );
-  assert.deepEqual(calls.portPosts[1].payload.tools, [], "pointer repair must not expose tools");
-  assert.match(calls.portPosts[1].payload.messages.at(-1).content, /currentTodoId must reference the in_progress task/);
+  assert.deepEqual(calls.portPosts[1].payload.tools, [], "synthesis must not expose tools");
   assert.equal(orchestrator.getActivePlan().plan.currentTodoId, "todo_1");
   assert.equal(orchestrator.getActivePlan().plan.todoList[0].status, "in_progress");
   assert.equal(calls.appended.filter((entry) => entry.role === "error").length, 0);
-  assert.ok(calls.appended.some((entry) => entry.purpose === "plan_action" && /TODO 结构未通过一致性校验/.test(entry.text)));
+  assert.ok(calls.appended.some((entry) => entry.purpose === "plan_action" && /本地完成结构校正/.test(entry.text)));
 }
 
-// A repeated pointer mismatch after the sole model repair degrades to the
-// deterministic local skeleton instead of terminating the plan turn.
+// Repeated pointer mismatches no longer consume a model repair or discard the
+// model's factual task content.
 {
   const pointerMismatch = JSON.parse(createTodoPlanAnswer(4));
   pointerMismatch.currentTodoId = "todo_2";
@@ -618,15 +617,14 @@ function createTodoPlanAnswer(taskCount) {
   assert.equal(calls.portPosts.length, 2, "pointer recovery must never recurse");
   const recovered = orchestrator.getActivePlan();
   assert.equal(recovered.plan.todoList.length, 4);
-  assert.equal(recovered.plan.todoList[0].title, "确认分析目标与边界");
+  assert.equal(recovered.plan.todoList[0].title, "任务 1");
   assert.equal(recovered.plan.currentTodoId, "todo_1");
   assert.equal(calls.appended.filter((entry) => entry.role === "error").length, 0);
-  assert.ok(calls.appended.some((entry) => entry.purpose === "plan_action" && /本地安全的 4 项 TODO 骨架/.test(entry.text)));
+  assert.ok(calls.appended.some((entry) => entry.purpose === "plan_action" && /本地完成结构校正/.test(entry.text)));
 }
 
-// An official V4 plan with too few TODOs receives exactly one no-tools JSON
-// structure repair. A valid repair is applied and both requests count toward
-// the displayed usage.
+// Too few TODOs are padded locally after the no-tools synthesis. Both model
+// calls count toward usage, but no third structure-repair request is needed.
 {
   const { calls, orchestrator } = createHarness({
     settingsOverride: {
@@ -636,27 +634,37 @@ function createTodoPlanAnswer(taskCount) {
     },
     streamResponses: [
       { content: createTodoPlanAnswer(2) },
-      { content: createTodoPlanAnswer(4) }
+      { content: createTodoPlanAnswer(2) }
     ]
   });
   await orchestrator.executePrompt("计算广州市 NDVI", true);
 
   assert.deepEqual(
     calls.portPosts.map((entry) => entry.payload.purpose),
-    ["plan_research", "plan_research_structure_repair"]
+    ["plan_research", "plan_research_synthesis"]
   );
-  assert.deepEqual(calls.portPosts[1].payload.tools, [], "structure repair must not expose tools");
-  assert.match(calls.portPosts[1].payload.messages.at(-1).content, /唯一一次自动结构修复/);
+  assert.deepEqual(calls.portPosts[1].payload.tools, [], "synthesis must not expose tools");
   assert.equal(orchestrator.getActivePlan().plan.todoList.length, 4);
   assert.equal(orchestrator.getActivePlan().state, "clarifying");
   assert.equal(calls.appended.filter((entry) => entry.role === "error").length, 0);
-  assert.ok(calls.appended.some((entry) => entry.purpose === "plan_action" && /已完成一次受限结构修复/.test(entry.text)));
+  assert.ok(calls.appended.some((entry) => entry.purpose === "plan_action" && /TODO 不足 4 项/.test(entry.text)));
   assert.ok(calls.statuses.some((status) => status.text.includes("等待需求澄清 · 18 tokens")));
 }
 
-// If the single model repair is still invalid, planning continues with the
-// deterministic four-task local skeleton instead of surfacing a fatal error.
+// If local canonicalization still leaves semantic ready-state errors and the
+// sole model repair also fails, planning uses the deterministic safe skeleton.
 {
+  const invalidReady = JSON.parse(createTodoPlanAnswer(4));
+  invalidReady.status = "ready";
+  invalidReady.phase = "reviewing";
+  invalidReady.questions = [];
+  invalidReady.currentTodoId = "todo_1";
+  invalidReady.nextTodoId = "";
+  invalidReady.todoList = invalidReady.todoList.map((todo) => ({
+    ...todo,
+    status: "completed",
+    result: "已完成"
+  }));
   const { calls, orchestrator } = createHarness({
     settingsOverride: {
       baseUrl: "https://api.deepseek.com/v1",
@@ -664,13 +672,14 @@ function createTodoPlanAnswer(taskCount) {
       supportsThinking: true
     },
     streamResponses: [
-      { content: createTodoPlanAnswer(2) },
-      { content: createTodoPlanAnswer(3) }
+      { content: "工具阶段完成。" },
+      { content: JSON.stringify(invalidReady) },
+      { content: JSON.stringify(invalidReady) }
     ]
   });
   await orchestrator.executePrompt("计算广州市 NDVI", true);
 
-  assert.equal(calls.portPosts.length, 2, "the structure repair must never recurse");
+  assert.equal(calls.portPosts.length, 3, "the structure repair must never recurse");
   const recovered = orchestrator.getActivePlan();
   assert.equal(recovered.plan.todoList.length, 4);
   assert.equal(recovered.plan.todoList[0].title, "确认分析目标与边界");
@@ -678,7 +687,7 @@ function createTodoPlanAnswer(taskCount) {
   assert.equal(recovered.state, "clarifying");
   assert.equal(calls.appended.filter((entry) => entry.role === "error").length, 0);
   assert.ok(calls.appended.some((entry) => entry.purpose === "plan_action" && /本地安全的 4 项 TODO 骨架/.test(entry.text)));
-  assert.ok(calls.statuses.some((status) => status.text.includes("等待需求澄清 · 18 tokens")));
+  assert.ok(calls.statuses.some((status) => status.text.includes("等待需求澄清 · 27 tokens")));
 }
 
 // ISS-008: a plan response that is only fenced code must not crash, must not

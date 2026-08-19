@@ -82,6 +82,18 @@ assert.deepEqual(
   "the no-tools structure repair must retain strict JSON mode"
 );
 
+const synthesis = buildChatRequestBody({
+  model: "deepseek-v4-flash",
+  messages,
+  settings: { baseUrl: "https://api.deepseek.com", thinkingEnabled: true },
+  purpose: "plan_research_synthesis"
+});
+assert.deepEqual(
+  synthesis.response_format,
+  { type: "json_object" },
+  "the post-tool synthesis request must enforce strict JSON mode"
+);
+
 const toolMessages = normalizeChatMessages([
   { role: "user", content: "核验数据集" },
   {
