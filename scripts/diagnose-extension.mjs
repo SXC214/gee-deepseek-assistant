@@ -573,18 +573,18 @@ async function auditNarrowTimelineLayout(page) {
       (_, index) => `${index + 1}: var syntheticLongLine = ee.ImageCollection('SYNTHETIC/LONG/DATASET/IDENTIFIER');`
     ).join("\n");
     conversation.scrollTop = conversation.scrollHeight;
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    await new Promise((resolve) => globalThis.requestAnimationFrame(() => globalThis.requestAnimationFrame(resolve)));
     const messageRect = lastMessage.getBoundingClientRect();
     const candidateRect = candidate.getBoundingClientRect();
     const overlap = Math.max(0, messageRect.bottom - candidateRect.top);
-    const contentVisibility = getComputedStyle(lastMessage).contentVisibility;
+    const contentVisibility = globalThis.getComputedStyle(lastMessage).contentVisibility;
     const horizontalOverflow = conversation.scrollWidth > conversation.clientWidth + 1;
     return {
-      passed: window.innerWidth <= 480
+      passed: globalThis.innerWidth <= 480
         && contentVisibility === "visible"
         && overlap <= 1
         && !horizontalOverflow,
-      viewportWidth: window.innerWidth,
+      viewportWidth: globalThis.innerWidth,
       contentVisibility,
       messageBottom: Math.round(messageRect.bottom),
       candidateTop: Math.round(candidateRect.top),
