@@ -128,6 +128,7 @@ assert.equal(statusView.classList.contains("status-processing"), true);
 assert.equal(statusView.attributes.get("aria-busy"), "true");
 assert.equal(setStatusView(statusView, "代码已生成"), "success");
 assert.equal(statusView.classList.contains("status-success"), true);
+assert.equal(statusView.title, "代码已生成");
 assert.equal(setStatusView(statusView, "请求失败"), "error");
 assert.equal(statusView.classList.contains("status-error"), true);
 assert.match(statusView.textContent, /请检查聊天框输出信息/);

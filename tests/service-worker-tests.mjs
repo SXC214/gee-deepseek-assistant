@@ -81,6 +81,21 @@ globalThis.fetch = async () => {
 
 const workerModule = await import(`../service-worker.js?test=${Date.now()}`);
 
+const oversizedOfficialContext = workerModule.__testing.formatOfficialContext(
+  Array.from({ length: 25 }, (_, index) => ({
+    type: "dataset",
+    title: `Bounded Dataset ${index + 1}`,
+    url: `https://developers.google.com/earth-engine/datasets/catalog/BOUNDED_${index + 1}`,
+    datasetId: `BOUNDED/${index + 1}`,
+    snippet: `snippet-${index + 1}-` + "s".repeat(800),
+    summary: `summary-${index + 1}-` + "x".repeat(4000)
+  }))
+);
+assert.ok(oversizedOfficialContext.length <= 24_000, "official retrieval context must have a hard total bound");
+assert.equal((oversizedOfficialContext.match(/\[DATASET \d+\]/g) || []).length, 12);
+assert.match(oversizedOfficialContext, /BOUNDED\/12/);
+assert.doesNotMatch(oversizedOfficialContext, /BOUNDED\/13/);
+
 function dispatch(message) {
   return new Promise((resolve) => {
     const keepAlive = runtimeOnMessage.first(message, {}, resolve);

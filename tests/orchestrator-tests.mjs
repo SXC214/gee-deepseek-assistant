@@ -50,7 +50,7 @@ function createHarness({
             ok: true,
             content: aiQueue?.shift() ?? aiAnswer,
             finishReason: "stop",
-            usage: { total_tokens: 7 }
+            usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 }
           };
         }
         return { ok: true };
@@ -72,7 +72,7 @@ function createHarness({
                     type: "DONE",
                     requestId: message.payload?.requestId,
                     content: streamAnswer,
-                    usage: { total_tokens: 9 },
+                    usage: { prompt_tokens: 5, completion_tokens: 4, total_tokens: 9 },
                     finishReason: "stop",
                     reasoningContent: "",
                     toolCalls: [],
@@ -212,7 +212,7 @@ function createTodoPlanAnswer(taskCount) {
     { role: "assistant", content: "最终回答" }
   ]);
   assert.deepEqual(calls.busy, [true, false]);
-  assert.ok(calls.statuses.some((status) => status.text.includes("完成 · 7 tokens")));
+  assert.ok(calls.statuses.some((status) => status.text.includes("完成 · 累计 7 tokens（输入 4 / 输出 3 / 1 次调用）")));
   await orchestrator.recordObservedFailure("gee-console:deadbeef Layer error", "gee_console");
   assert.match(orchestrator.getReasoningSession().failures.at(-1).signature, /gee_console:gee-console:deadbeef/);
 }
@@ -235,7 +235,7 @@ function createTodoPlanAnswer(taskCount) {
   assert.match(calls.candidates[0].code, /projects\/demo\/assets\/image/);
   assert.equal(calls.candidates[0].validation.status, "passed");
   assert.equal(calls.appended.find((entry) => entry.role === "assistant").text, "已修复：\n[代码见下方修改预览]");
-  assert.ok(calls.statuses.some((status) => status.text.includes("完成 · 14 tokens")));
+  assert.ok(calls.statuses.some((status) => status.text.includes("完成 · 累计 14 tokens（输入 8 / 输出 6 / 2 次调用）")));
 }
 
 // Conversation window keeps at most 6 prior messages and stays user-aligned.
@@ -310,7 +310,7 @@ function createTodoPlanAnswer(taskCount) {
   const assistant = calls.appended.find((entry) => entry.role === "assistant" && entry.purpose === "direct");
   assert.equal(assistant.text, "流式回答");
   assert.deepEqual(orchestrator.getDirectConversation().at(-1), { role: "assistant", content: "流式回答" });
-  assert.ok(calls.statuses.some((status) => status.text.includes("完成 · 9 tokens")));
+  assert.ok(calls.statuses.some((status) => status.text.includes("完成 · 累计 9 tokens（输入 5 / 输出 4 / 1 次调用）")));
 }
 
 // Opt-in off: the same compatible endpoint keeps the non-streaming AI_CHAT path.
@@ -329,9 +329,9 @@ function createTodoPlanAnswer(taskCount) {
   assert.ok(calls.statuses.some((status) => status.text.includes("兼容模式")));
 }
 
-// Official V4 full/loop passes may request bounded read-only tools. The
-// assistant reasoning/tool-call turn is replayed to the model in memory but
-// only the final answer enters the durable conversation window.
+// Direct mode already injects the selected editor, Console and official-search
+// context. Official V4 must reuse that snapshot instead of requesting the same
+// read-only tools a second time and multiplying prompt usage.
 {
   const source = {
     type: "dataset",
@@ -358,19 +358,6 @@ function createTodoPlanAnswer(taskCount) {
     },
     streamResponses: [
       {
-        content: "",
-        reasoningContent: "需要核验目录",
-        toolCalls: [{
-          id: "call_1",
-          type: "function",
-          function: {
-            name: "search_gee_datasets",
-            arguments: '{"query":"Sentinel-2 SR harmonized coverage bands"}'
-          }
-        }],
-        finishReason: "tool_calls"
-      },
-      {
         content: "已根据官方目录完成核验。",
         reasoningContent: "核验完成",
         toolCalls: [],
@@ -381,16 +368,9 @@ function createTodoPlanAnswer(taskCount) {
 
   await orchestrator.executePrompt("请核验 Sentinel-2 数据集和波段", false);
 
-  assert.equal(calls.portPosts.length, 2, "one tool turn must lead to one follow-up model request");
-  assert.deepEqual(
-    calls.portPosts[0].payload.tools.map((tool) => tool.function.name),
-    ["search_gee_datasets"]
-  );
-  const replayed = calls.portPosts[1].payload.messages;
-  const assistantToolTurn = replayed.find((message) => message.role === "assistant" && message.tool_calls);
-  assert.equal(assistantToolTurn.reasoning_content, "需要核验目录");
-  assert.equal(replayed.find((message) => message.role === "tool").tool_call_id, "call_1");
-  assert.equal(calls.toolSearches.length, 2, "initial retrieval plus model-targeted retrieval");
+  assert.equal(calls.portPosts.length, 1, "direct mode must use one final model request");
+  assert.deepEqual(calls.portPosts[0].payload.tools, [], "already-injected context must not expose duplicate read tools");
+  assert.equal(calls.toolSearches.length, 1, "official retrieval must run only once");
   assert.deepEqual(orchestrator.getDirectConversation().at(-1), {
     role: "assistant",
     content: "已根据官方目录完成核验。"
@@ -685,7 +665,7 @@ function createTodoPlanAnswer(taskCount) {
   assert.equal(orchestrator.getActivePlan().state, "clarifying");
   assert.equal(calls.appended.filter((entry) => entry.role === "error").length, 0);
   assert.ok(calls.appended.some((entry) => entry.purpose === "plan_action" && /TODO 不足 4 项/.test(entry.text)));
-  assert.ok(calls.statuses.some((status) => status.text.includes("等待需求澄清 · 18 tokens")));
+  assert.ok(calls.statuses.some((status) => status.text.includes("等待需求澄清 · 累计 18 tokens（输入 10 / 输出 8 / 2 次调用）")));
 }
 
 // If local canonicalization still leaves semantic ready-state errors and the
@@ -724,7 +704,7 @@ function createTodoPlanAnswer(taskCount) {
   assert.equal(recovered.state, "clarifying");
   assert.equal(calls.appended.filter((entry) => entry.role === "error").length, 0);
   assert.ok(calls.appended.some((entry) => entry.purpose === "plan_action" && /本地安全的 4 项 TODO 骨架/.test(entry.text)));
-  assert.ok(calls.statuses.some((status) => status.text.includes("等待需求澄清 · 27 tokens")));
+  assert.ok(calls.statuses.some((status) => status.text.includes("等待需求澄清 · 累计 27 tokens（输入 15 / 输出 12 / 3 次调用）")));
 }
 
 // ISS-008: a plan response that is only fenced code must not crash, must not
