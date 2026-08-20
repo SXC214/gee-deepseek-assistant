@@ -87,6 +87,9 @@ try {
 
   const sidepanel = await context.newPage();
   attachPageDiagnostics(sidepanel, "sidepanel", report.events);
+  if (options.mockTodoRecovery) {
+    await sidepanel.setViewportSize({ width: 460, height: 885 });
+  }
   await navigateWithDiagnostics(
     sidepanel,
     `chrome-extension://${extensionId}/sidepanel.html`,
@@ -530,6 +533,7 @@ async function auditHistoryWindow(page) {
       firstId: document.querySelector("#conversationTimeline [data-chat-id]")?.dataset.chatId || "",
       scrollTop: document.querySelector("#conversation")?.scrollTop || 0
     }));
+    const narrowLayout = await auditNarrowTimelineLayout(page);
     return {
       passed: initial.count === 30
         && initial.firstId === "history-audit-45"
@@ -537,10 +541,12 @@ async function auditHistoryWindow(page) {
         && initial.timelineLiveCardCount === 0
         && expanded.count === 60
         && expanded.firstId === "history-audit-15"
-        && expanded.scrollTop >= beforeTop,
+        && expanded.scrollTop >= beforeTop
+        && narrowLayout.passed,
       initial,
       expanded,
-      beforeTop
+      beforeTop,
+      narrowLayout
     };
   } finally {
     await page.evaluate(async (history) => {
@@ -550,6 +556,44 @@ async function auditHistoryWindow(page) {
     await page.locator("#conversationTimeline").waitFor({ state: "attached" });
     await page.waitForFunction(() => document.querySelector("#sendButton")?.disabled === false);
   }
+}
+
+async function auditNarrowTimelineLayout(page) {
+  return page.evaluate(async () => {
+    const conversation = document.querySelector("#conversation");
+    const lastMessage = document.querySelector("#conversationTimeline [data-chat-id]:last-of-type");
+    const candidate = document.querySelector("#candidatePanel");
+    const diff = document.querySelector("#diffView");
+    if (!conversation || !lastMessage || !candidate || !diff) {
+      return { passed: false, reason: "layout probe elements unavailable" };
+    }
+    candidate.classList.remove("hidden");
+    diff.textContent = Array.from(
+      { length: 80 },
+      (_, index) => `${index + 1}: var syntheticLongLine = ee.ImageCollection('SYNTHETIC/LONG/DATASET/IDENTIFIER');`
+    ).join("\n");
+    conversation.scrollTop = conversation.scrollHeight;
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const messageRect = lastMessage.getBoundingClientRect();
+    const candidateRect = candidate.getBoundingClientRect();
+    const overlap = Math.max(0, messageRect.bottom - candidateRect.top);
+    const contentVisibility = getComputedStyle(lastMessage).contentVisibility;
+    const horizontalOverflow = conversation.scrollWidth > conversation.clientWidth + 1;
+    return {
+      passed: window.innerWidth <= 480
+        && contentVisibility === "visible"
+        && overlap <= 1
+        && !horizontalOverflow,
+      viewportWidth: window.innerWidth,
+      contentVisibility,
+      messageBottom: Math.round(messageRect.bottom),
+      candidateTop: Math.round(candidateRect.top),
+      overlap: Math.round(overlap),
+      horizontalOverflow,
+      conversationClientWidth: conversation.clientWidth,
+      conversationScrollWidth: conversation.scrollWidth
+    };
+  });
 }
 
 function createMockTodoPlan(taskCount) {
@@ -842,7 +886,7 @@ function buildFindings(currentReport) {
       ? {
         severity: "info",
         code: "history_window_passed",
-        summary: "75 条长历史按 30 条分页渲染，加载更早消息后滚动锚点保持稳定"
+        summary: "460px 窄侧栏中，75 条长历史分页、滚动锚点及实时卡片边界均保持稳定"
       }
       : {
         severity: "error",

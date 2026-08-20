@@ -119,7 +119,10 @@ assert.match(script, /entry\.role === "assistant" && \["source", "plan"\]\.inclu
 assert.match(script, /CHAT_RENDER_PAGE_SIZE = 30/);
 assert.match(script, /function loadOlderChatHistory\(\)/);
 assert.match(script, /details\.addEventListener\("toggle"/);
-assert.match(styles, /\.chat-entry\s*\{[^}]*content-visibility:\s*auto/);
+assert.doesNotMatch(styles, /\.chat-entry\s*\{[^}]*content-visibility:\s*auto/);
+assert.match(styles, /\.conversation\s*\{[^}]*display:\s*block/);
+assert.match(styles, /\.conversation-timeline,[\s\S]*?\.reasoning-stream-slot\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+assert.match(styles, /\.message,[\s\S]*?\.activity-card\s*\{[^}]*min-width:\s*0/);
 assert.match(orchestratorScript, /本轮仍会基于你的需求和官方资料制定计划/);
 assert.doesNotMatch(script, /throw new Error\("无法连接 Earth Engine 编辑器，请取消代码上下文选项或打开 Code Editor"\)/);
 assert.doesNotMatch(script, /无法读取当前 GEE 编辑器上下文/);

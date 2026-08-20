@@ -292,7 +292,7 @@ textarea:focus {
 .chat-subtitle { color: var(--muted); font-size: 9px; }
 
 .conversation {
-  display: grid;
+  display: block;
   min-height: 0;
   flex: 1;
   align-content: start;
@@ -303,8 +303,8 @@ textarea:focus {
 }
 
 .conversation-timeline,
-.live-workspace { display: grid; min-width: 0; align-content: start; gap: 9px; }
-.reasoning-stream-slot { display: grid; gap: 9px; }
+.live-workspace,
+.reasoning-stream-slot { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; align-content: start; gap: 9px; }
 .conversation-timeline { min-height: 0; }
 .live-workspace:not(:empty) { margin-top: 9px; }
 .history-load { position: sticky; z-index: 3; top: 4px; justify-self: center; min-height: 26px; background: var(--surface); color: var(--blue-dark); font-size: 10px; box-shadow: var(--shadow); }
@@ -325,6 +325,7 @@ textarea:focus {
 
 .message,
 .activity-card {
+  min-width: 0;
   padding: 10px 11px;
   border: 1px solid var(--border);
   border-radius: 11px;
@@ -332,7 +333,6 @@ textarea:focus {
 }
 
 .message { position: relative; }
-.chat-entry { content-visibility: auto; contain-intrinsic-size: auto 96px; }
 .message.user { margin-left: 32px; border-color: #cbdcf8; background: var(--blue-soft); }
 .message.assistant { margin-right: 18px; background: #fff; }
 .message.error { margin-right: 18px; border-color: #edb5b1; background: var(--red-soft); color: var(--red); }
@@ -440,7 +440,7 @@ details.activity-card[open] > summary::before { transform: rotate(90deg); }
 .candidate-code-details { margin: 0 0 10px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
 .candidate-code-details summary { padding: 8px 9px; color: var(--blue-dark); font-weight: 600; }
 .candidate-code-view,
-.diff-view { margin: 0; padding: 9px; overflow: auto; border: 1px solid var(--border); background: #111827; color: #e5e7eb; white-space: pre; font: 11px/1.5 "Roboto Mono", ui-monospace, monospace; }
+.diff-view { width: 100%; min-width: 0; max-width: 100%; margin: 0; padding: 9px; overflow: auto; border: 1px solid var(--border); background: #111827; color: #e5e7eb; white-space: pre; font: 11px/1.5 "Roboto Mono", ui-monospace, monospace; }
 .candidate-code-view { max-height: min(430px, 50vh); border-width: 1px 0 0; }
 .diff-view { max-height: min(320px, 40vh); margin-bottom: 10px; border-radius: 8px; }
 .candidate-applied { border-color: #8bc79c; background: #f3faf5; }
